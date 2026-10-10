@@ -32,6 +32,7 @@ import cv2
 import numpy as np
 
 from app.antispoof import models_dir
+from app import device  # noqa: E402
 
 THRESHOLD = 0.5   # live < THRESHOLD — подозрение на подмену
 LIVE_AT = 0.75    # live ≥ LIVE_AT — есть объём
@@ -94,7 +95,7 @@ def _session():
             so = ort.SessionOptions()
             so.intra_op_num_threads = max(1, min(4, int(os.environ.get("FACE_THREADS", "4") or 4)))
             so.inter_op_num_threads = 1
-            _sess = ort.InferenceSession(str(path), so, providers=["CPUExecutionProvider"])
+            _sess = device.session(path, so)
     return _sess
 
 

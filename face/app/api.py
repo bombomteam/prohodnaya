@@ -33,6 +33,7 @@ from .imaging import ImageError, decode_image
 from .schemas import (VerifyCameraRequest, VerifyFramesRequest, decode_embedding, iso, reference_response,
                       to_ts, verify_response)
 from .types import Reason, Reference
+from app import device  # noqa: E402
 
 log = logging.getLogger("face.api")
 router = APIRouter()
@@ -230,6 +231,7 @@ async def health(request: Request):
         "model_version": pipeline.model_version if pipeline else None,
         "embedding_dim": pipeline.embedding_dim if pipeline else None,
         "models_loaded": pipeline is not None,
+        "device": device.name(),
         "cameras": cameras,
     }
 
@@ -321,7 +323,9 @@ async def verify_camera(request: Request, req: VerifyCameraRequest):
     t_wait = time.perf_counter()
     frames: list = []
     empty_code = "no_frames"
-    if hub is None or cam not in hub.camera_ids():
+    ids = getattr(hub, "camera_ids", ()) if hub is not None else ()
+    ids = ids() if callable(ids) else ids  # у CameraHub это свойство
+    if hub is None or cam not in ids:
         empty_code = "camera_unavailable"
     else:
         try:

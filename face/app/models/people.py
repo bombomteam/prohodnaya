@@ -17,6 +17,7 @@ from ..types import Person
 
 os.environ.setdefault("ORT_DISABLE_TELEMETRY", "1")
 import onnxruntime as ort  # noqa: E402
+from app import device  # noqa: E402
 
 MODELS = {
     "yolox_nano": {"file": "yolox_nano.onnx", "size": 416},
@@ -123,7 +124,7 @@ class PeopleDetector:
         so.inter_op_num_threads = 1
         so.log_severity_level = 3
         so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        self.sess = ort.InferenceSession(str(path), sess_options=so, providers=["CPUExecutionProvider"])
+        self.sess = device.session(path, so)
         self.input_name = self.sess.get_inputs()[0].name
         self._grids, self._strides = self._make_grids(self.size)
         self.params = dict(COUNT_PARAMS)

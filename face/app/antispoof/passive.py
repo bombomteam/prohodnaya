@@ -25,6 +25,7 @@ import cv2
 import numpy as np
 
 from app.antispoof import models_dir
+from app import device  # noqa: E402
 
 # (имя файла, масштаб кропа)
 MODELS = (("2.7_80x80_MiniFASNetV2.onnx", 2.7), ("4_0_0_80x80_MiniFASNetV1SE.onnx", 4.0))
@@ -68,7 +69,7 @@ def _load() -> list[tuple[float, object, str]]:
                 path = root / fname
                 if not path.is_file():
                     raise FileNotFoundError(f"нет весов антиспуфинга {path} (face/models/fetch_models.sh minifasnet)")
-                sess = ort.InferenceSession(str(path), sess_options=so, providers=["CPUExecutionProvider"])
+                sess = device.session(path, so)
                 out.append((scale, sess, sess.get_inputs()[0].name))
             _sessions = out
     return _sessions

@@ -7,6 +7,26 @@ services:
     # Пайплайн собирает образ с тегом = SHA коммита и хранит прошлые теги для отката.
     image: ${BACKEND_IMAGE:-prohodnaya-backend}:${BACKEND_TAG:-local}
 
+  # Видеокарта сервера (NVIDIA A10) для модуля лиц: только на стенде. Образ face работает и без неё
+  # (FACE_DEVICE=auto), поэтому локально у остальных ничего не меняется.
+  face:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  face-console:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
   caddy:
     # HTTPS для всего стенда: сертификаты Let's Encrypt выпускаются и продлеваются сами.
     # Сеть хоста: Caddy ходит к сервисам через их порты на 127.0.0.1 и к странице

@@ -7,7 +7,8 @@ python-multipart==0.0.32
 numpy==2.5.3
 pillow==12.3.0
 opencv-python-headless==5.0.0.93
-onnxruntime==1.31.0
+# onnxruntime-gpu: на машине без видеокарты работает на CPU (FACE_DEVICE=auto, app/device.py).
+onnxruntime-gpu[cuda,cudnn]==1.31.0
 # транзитивные
 annotated-doc==0.0.5
 annotated-types==0.8.0
