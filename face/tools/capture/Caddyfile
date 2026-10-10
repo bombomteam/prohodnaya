@@ -4,6 +4,10 @@
 {
 	http_port 8088
 	auto_https disable_redirects
+	# HTTP/2 через этот прокси давал загрузку ~4 КБ/с; HTTP/1.1 — нормальная скорость
+	servers {
+		protocols h1
+	}
 }
 
 {$CAPTURE_DOMAIN} {

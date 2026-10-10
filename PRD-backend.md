@@ -287,6 +287,7 @@ def require_role(*roles: str) -> Depends-callable   # 401 без токена, 4
   - `code` = `secrets.token_urlsafe(24)`, TTL `ENROLL_CODE_TTL_MIN`.
   - `enroll_url` = `{PUBLIC_APP_URL}/enroll?code=...` (из неё фронт рисует QR).
   - Выдача нового кода гасит предыдущие неиспользованные коды этого человека.
+  - Заблокированному человеку код не выдаётся: 409 `PERSON_BLOCKED` (решение команды).
 - `POST /enroll {code, public_key_jwk}` — без авторизации
   - JWK валиден: `kty=EC`, `crv=P-256`, есть `x`, `y`, нет `d` (если пришёл приватный ключ — отказ).
   - Код гасится атомарно: `UPDATE enroll_codes SET used_at=now() WHERE code=:c AND used_at IS NULL AND expires_at>now() RETURNING person_id`. Пусто → 400 `ENROLL_CODE_INVALID` «Ссылка недействительна или уже использована, попросите новую у администратора».

@@ -36,12 +36,19 @@
 
 ## Коды причин
 
+Изменения контракта (2026-10-10):
+
+- добавлен код `face_covered`;
+- новое правило «больше одного лица на проходе → `multiple_faces`»;
+- в `facts` добавлены `faces_max`, `faces_multi_frames`, `gallery_size` и `gallery_best_similarity`;
+- в `verify` добавлено необязательное поле `gallery`.
+
 Полная таблица с текстами для человека — [02-tasks.md](02-tasks.md#решение-причины-отказа-код--человеческий-текст). Поле `reason.text` модуль заполняет этим текстом.
 
 Используемые коды:
 
 - `ok`;
-- `no_face`, `multiple_people`, `multiple_faces`, `turn_to_camera`, `too_small`, `low_quality`;
+- `no_face`, `multiple_people`, `multiple_faces`, `face_covered`, `turn_to_camera`, `too_small`, `low_quality`;
 - `face_mismatch`;
 - `spoof_suspected`, `frame_is_reference`, `frame_replayed`;
 - `no_frames`, `camera_unavailable`;
@@ -104,6 +111,10 @@
     "model_version": "face-v1:<детектор>+<распознавание>",
     "reference_hash": "c3a1f0e2d4b59687"
   },
+  "gallery": [
+    {"id": "emp-17", "embedding": "AAAgQQAAoEA..."},
+    {"id": "emp-23", "embedding": "AAAgQQAAoEA..."}
+  ],
   "camera_id": "gate-1",
   "since": "2026-10-10T11:20:00.000Z",
   "until": "2026-10-10T11:20:06.000Z",
@@ -118,6 +129,10 @@
 - **Окно больше 15 с не принимается** (`400`): модуль держит результаты по кадрам примерно за последние 20 с, только в памяти.
 - **`wait_ms`** — сколько модуль ждёт кадров, если `until` ещё не наступил или кадры запаздывают. По умолчанию 3000, максимум 5000.
 - **`model_version` эталона не совпадает с текущей** → `status: "reference_outdated"`.
+- **`gallery` (необязательно, рекомендуется)** — эталоны других активных сотрудников той же `model_version`: всех или хотя бы самых похожих.
+  - Правило: если кадр похож на кого-то из `gallery` не меньше, чем на заявленный эталон, → `face_mismatch` («кадр больше похож на другого сотрудника»).
+  - Это защита от сценария кейса «прошёл по телефону коллеги»: на первом тестовом пакете правило убирает все ложные совпадения коллег, в том числе похожих Кимов. Без `gallery` работает только порог.
+  - Эмбеддинги из `gallery` модуль не хранит.
 
 ## `POST /v1/verify/frames` — запасной режим «снимок» (видео из одного или нескольких кадров)
 
@@ -146,9 +161,13 @@
     "frames_usable": 15,
     "people_max": 1,
     "people_multi_frames": 0,
-    "similarity": 0.62,
-    "threshold": 0.40,
+    "faces_max": 1,
+    "faces_multi_frames": 0,
+    "similarity": 0.74,
+    "threshold": 0.68,
     "match": true,
+    "gallery_size": 2,
+    "gallery_best_similarity": 0.31,
     "liveness": {
       "passive": 0.97, "passive_threshold": 0.5,
       "sequence": 0.81, "sequence_threshold": 0.5,
@@ -170,11 +189,12 @@
 1. `reference_outdated` — эталон от другой модели.
 2. `camera_unavailable`, `no_frames` — нет кадров за окно.
 3. `multiple_people` — двое и больше в зоне прохода. Нужно ≥ 2 кадра подряд, одиночный ложный кадр не считается.
-4. `frame_is_reference`, `frame_replayed` — кадр совпадает с эталоном или уже присылался (в основном запасной режим).
-5. `spoof_suspected` — пассивный антиспуфинг по кадрам окна или «живость» по нескольким кадрам.
-6. `no_face`, `turn_to_camera`, `too_small`, `low_quality` — нет пригодного кадра. Берётся самая частая причина среди кадров окна.
-7. `face_mismatch` — лучший пригодный кадр ниже порога.
-8. `ok`.
+4. `multiple_faces` — на кадре больше одного лица сопоставимого размера, в том числе лицо на фото или экране рядом с живым. Детектор людей насчитает одного человека, а лиц два. В видео нужно ≥ 2 кадра подряд, в `verify/frames` — сразу.
+5. `frame_is_reference`, `frame_replayed` — кадр совпадает с эталоном или уже присылался (в основном запасной режим).
+6. `spoof_suspected` — пассивный антиспуфинг по кадрам окна или «живость» по нескольким кадрам.
+7. `face_covered`, `no_face`, `turn_to_camera`, `too_small`, `low_quality` — нет пригодного кадра. Берётся самая частая причина среди кадров окна. `face_covered` — лицо найдено, но закрыто (балаклава, маска, рука или телефон перед лицом): это не `face_mismatch`.
+8. `face_mismatch` — лучший пригодный кадр ниже порога.
+9. `ok`.
 
 `facts` заполняются всегда, насколько удалось посчитать. Это для журнала и консоли.
 
@@ -186,16 +206,32 @@
   1. **Камера: люди** — живое видео с рамками людей и их числом.
   2. **Камера: лица** — рамки лиц, качество, «живость». Если загружен демо-эталон — ещё сходство и совпадение.
   3. **Проверка файла** — загрузить фото или видео и, по желанию, фото эталона. Тот же конвейер, результат по кадрам: рамки, люди, сходство, «живость», причина.
-- `GET /v1/cameras` — список камер и состояние, как в `health`.
-- `GET /v1/cameras/{camera_id}/live.mjpeg?layer=people|faces` — MJPEG уже проанализированных кадров (~4 к/с) с нарисованными рамками.
-- `GET /v1/cameras/{camera_id}/events` — Server-Sent Events: факты по каждому проанализированному кадру (рамки, `people_count`, качество, `passive`) для наложения поверх видео.
-- `POST /v1/console/reference` — `multipart`, поле `image`: демо-эталон для вкладки «лица». Только в памяти, сбрасывается при перезапуске. Ответ как у `references/check`, без `embedding`.
+- `GET /v1/cameras` — `{"cameras": [...]}`, элементы как в `health` (`CameraHub.status()`).
+- `GET /v1/cameras/{camera_id}/live.mjpeg?layer=people|faces[&limit=N]` — MJPEG уже проанализированных кадров (~4 к/с) с нарисованными рамками. Нет кадров дольше 2 с — кадр-заглушка «Нет кадров с камеры». `limit` — отдать N кадров и закончить (тесты, снимок). Неизвестная камера — `404 camera_unavailable`.
+  - слой `people`: рамки людей (зелёная — в зоне прохода, серая — фон), тонкие рамки лиц, крупно «Людей: N»; при N ≥ 2 — красным и «Проходите по одному»;
+  - слой `faces`: рамки лиц (зелёная — пригодно, жёлтая — причина качества, красная — пассивный антиспуфинг ниже порога), подписи «качество», «живое/подделка?», «сходство … совпал/не совпал» с демо-эталоном.
+- `GET /v1/cameras/{camera_id}/events[?limit=N]` — Server-Sent Events:
+  - `event: frame` — факты кадра: `index`, `ts`, `width`, `height`, `people[{bbox,score,in_zone}]`, `people_count`, `faces[{bbox,det_score,quality,quality_status,passive}]`, `best`, `status`, `status_text`, `similarity` (с демо-эталоном или `null`), `passive`, `match`, `match_threshold`, `passive_threshold`;
+  - `event: idle` — нет кадров дольше 2 с, в `data` состояние камеры.
+- `POST /v1/console/reference` — `multipart`, поле `image`: демо-эталон для вкладки «лица». Только в памяти, сбрасывается при перезапуске. Ответ как у `references/check`, без `embedding`. `GET` — текущий демо-эталон или `null`, `DELETE` — сбросить.
 - `POST /v1/console/analyze` — `multipart`:
-  - поля: `media` (фото или видео) и необязательный `reference` (фото);
-  - из видео берётся 4 к/с, не больше 15 с;
-  - ответ: `{ "reference": <как references/check без embedding> | null, "frames": [ {"index", "ts_ms", "width", "height", "people": [{"bbox","score"}], "people_count", "faces": [{"bbox","det_score","quality"}], "status", "similarity", "passive"} ], "result": <как ответ verify> }`.
+  - поля: `media` (фото или видео), необязательный `reference` (фото), `previews` (`true` по умолчанию: в каждом кадре уменьшенный JPEG `image` как data URL и `image_scale` для рамок);
+  - видео распознаётся по сигнатуре (MP4/MOV, WebM/MKV, AVI), из него берётся 4 к/с, не больше 15 с, кадры больше 1920 px уменьшаются;
+  - ответ: `{ "request_id", "reference": <как references/check без embedding> | null, "frames": [ {"index", "ts_ms", "width", "height", "people": [{"bbox","score","in_zone"}], "people_count", "faces": [{"bbox","det_score","quality","quality_status","passive"}], "best", "status", "status_text", "similarity", "passive", "image"?, "image_scale"?} ], "result": <как ответ verify> | null, "summary": {"kind", "frames_total", "frames_with_face", "frames_usable", "people_max", "similarity_max", "match_threshold", "passive_threshold", "analysis_ms"} }`;
+  - `result` считается через `decide` (видео — режим `camera`, фото — `frames`) только при принятом эталоне; иначе `null`;
+  - ошибки — как везде: `400 bad_image`, `413 too_large`, `415 unsupported_format`, `500 internal_error`, `503` если ядро не загружено.
 
-Консоль ничего не читает из `~/face-data/` и не сохраняет загруженное: файлы обрабатываются в памяти.
+Консоль ничего не читает из `~/face-data/` и не сохраняет загруженное: файлы обрабатываются в памяти. Видео cv2 читает только из файла, поэтому оно пишется во временный файл в `/tmp` (tmpfs) и удаляется сразу после открытия. Одновременно идёт один анализ консоли (очередь), чтобы не отнимать CPU у живой камеры.
+
+Стык консоли с ядром и приёмом видео — через `app.state` (заполняет `app/main.py`):
+
+| Поле | Что | Обязательно |
+| --- | --- | --- |
+| `app.state.pipeline` | `Pipeline` с `analyze(img_rgb, ts) -> FrameAnalysis` и `model_version` | да, иначе `503` |
+| `app.state.decide` | `decide(frames, reference, mode) -> VerifyResult` | для итога в `analyze` |
+| `app.state.hub` | `CameraHub` (`status()`, `subscribe(camera_id)` с `aget(timeout)`; запасной путь — `latest(camera_id)`) | для вкладок камер; нет — список камер пуст |
+| `app.state.settings` | `Settings` из `app/config.py`: пороги `match_threshold`, `liveness_threshold` | нет: иначе `app.state.match_threshold` / `passive_threshold`, затем `FACE_MATCH_THRESHOLD` / `FACE_LIVENESS_THRESHOLD` |
+| `app.state.check_reference` | `check_reference(img_rgb) -> dict` как ответ `references/check` | нет: иначе консоль проверяет эталон сама по `Pipeline.analyze` |
 
 ## Настройки (переменные окружения)
 

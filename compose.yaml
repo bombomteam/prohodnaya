@@ -1,4 +1,4 @@
-# Стенд «Проходной»: frontend и Keycloak; backend и БД приложения добавляются отдельно.
+# Стенд «Проходной»: frontend, Keycloak, backend и db (db и backend — профиль backend).
 #
 # Запуск из корня репозитория:
 #   cp .env.example .env        # при необходимости поправить значения

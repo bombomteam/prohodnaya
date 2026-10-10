@@ -10,7 +10,9 @@ import argparse
 import json
 import os
 import time
+import base64
 import urllib.request
+from pathlib import Path
 
 os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
 import cv2  # noqa: E402
@@ -25,7 +27,9 @@ def pct(v: list[float], p: float) -> float | None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--url", default="rtsp://127.0.0.1:8554/live/gate")
+    read_pass = (Path.home() / ".config/prohodnaya/read_pass")
+    cred = f"reader:{read_pass.read_text().strip()}@" if read_pass.exists() else ""
+    ap.add_argument("--url", default=f"rtsp://{cred}127.0.0.1:8554/live/gate")
     ap.add_argument("--api", default="http://127.0.0.1:9997/v3/paths/get/live/gate")
     ap.add_argument("--seconds", type=float, default=15)
     ap.add_argument("--sample-fps", type=float, default=4, help="сколько кадров в секунду отдаём на анализ")
@@ -57,7 +61,7 @@ def main() -> None:
     span = arrivals[-1] - arrivals[0] if len(arrivals) > 1 else 0
     gaps = [(b - a) * 1000 for a, b in zip(arrivals, arrivals[1:])]
     out = {
-        "url": args.url, "open_ms": round(open_ms), "frames": len(arrivals), "seconds": round(span, 2),
+        "url": args.url.replace(cred, "reader:***@") if cred else args.url, "open_ms": round(open_ms), "frames": len(arrivals), "seconds": round(span, 2),
         "fps_stream": round((len(arrivals) - 1) / span, 2) if span else None,
         "frame_hw": sorted(shapes), "read_wait_ms_p50": pct(read_ms, 50), "read_wait_ms_p95": pct(read_ms, 95),
         "gap_ms_p50": pct(gaps, 50), "gap_ms_p95": pct(gaps, 95), "gap_ms_max": round(max(gaps), 1) if gaps else None,
@@ -65,7 +69,10 @@ def main() -> None:
         "decode_cpu_cores": round(cpu_s / span, 3) if span else None,  # сколько ядер занято декодированием
     }
     try:
-        info = json.load(urllib.request.urlopen(args.api, timeout=3))
+        req = urllib.request.Request(args.api)
+        if cred:
+            req.add_header("Authorization", "Basic " + base64.b64encode(cred[:-1].encode()).decode())
+        info = json.load(urllib.request.urlopen(req, timeout=3))
         out["source"] = (info.get("source") or {}).get("type")
         out["tracks"] = info.get("tracks")
         out["bytes_received"] = info.get("bytesReceived") or info.get("inboundBytes")

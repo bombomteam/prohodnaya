@@ -65,6 +65,16 @@ export function mapEvent(event) {
   };
 }
 
+// Each accepted route point is a recorded sighting, not proof of continuous presence.
+export function appearancesFromRoutes(routes, zones) {
+  const names = new Map(zones.map(zone => [String(zone.id), zone.name]));
+  return routes.flatMap(route => route.points.map(point => ({
+    employeeId: String(route.employeeId), employeeName: route.employeeName,
+    at: point.at, zoneName: point.zoneId == null ? "Вне размеченных зон" : names.get(String(point.zoneId)) || "Зона не определена",
+  }))).filter(entry => entry.at && !Number.isNaN(Date.parse(entry.at)))
+    .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+}
+
 function mapSitePerson(person) {
   return { id: String(person.person_id), name: person.fio, company: person.group?.name || "", role: "", status: "inside",
     enrolled: true, enteredAt: person.since, lastSeenAt: person.last_seen_at, lastZone: person.last_zone?.name || null };
@@ -96,7 +106,7 @@ export const backendApi = {
     body.set("fio", String(form.get("name") || "").trim());
     body.set("position", String(form.get("role") || "").trim());
     const groupId = form.get("groupId");
-    if (groupId) body.set("group_id", String(groupId));
+    if (groupId || id) body.set("group_id", String(groupId || ""));
     const photo = form.get("referencePhoto");
     if (photo instanceof Blob && photo.size) body.set("photo", photo, photo.name || "reference.jpg");
     const person = await request(id ? `/persons/${encodeURIComponent(id)}` : "/persons", { method: id ? "PATCH" : "POST", body });
