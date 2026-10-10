@@ -2,6 +2,7 @@ import { config } from "../config.js";
 import { accessToken, configureAuthTransport } from "./auth.js";
 import { loadDevice, saveDevice, createDevice, parsePassagePayload, signPassage, signLocations } from "./device.js";
 import { demoApi } from "./demo-api.js";
+import { caseZoneById } from "./zones.js";
 
 export class ApiError extends Error {
   constructor(message, status, code) {
@@ -67,10 +68,9 @@ export function mapEvent(event) {
 
 // Each accepted route point is a recorded sighting, not proof of continuous presence.
 export function appearancesFromRoutes(routes, zones) {
-  const names = new Map(zones.map(zone => [String(zone.id), zone.name]));
   return routes.flatMap(route => route.points.map(point => ({
     employeeId: String(route.employeeId), employeeName: route.employeeName,
-    at: point.at, zoneName: point.zoneId == null ? "Вне размеченных зон" : names.get(String(point.zoneId)) || "Зона не определена",
+    at: point.at, zoneName: caseZoneById(point.zoneId, zones) || "Вне трёх заданных зон",
   }))).filter(entry => entry.at && !Number.isNaN(Date.parse(entry.at)))
     .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
 }
@@ -125,12 +125,12 @@ export const backendApi = {
   createChallenge: async direction => mapPassage(await request("/passages", { method: "POST", body: { direction: directionToBackend(direction) } })),
   challenge: async id => mapPassage(await request(`/passages/${encodeURIComponent(id)}`)),
   async decidePass(sessionId, direction, frames) {
-    if (!Array.isArray(frames) || frames.length !== 3 || frames.some(frame => !(frame instanceof Blob) || !frame.size)) {
-      throw new ApiError("Для проверки лица нужны три кадра с камеры.");
+    if (!Array.isArray(frames) || frames.length < 1 || frames.length > 10 || frames.some(frame => !(frame instanceof Blob) || !frame.size)) {
+      throw new ApiError("Для проверки лица отправьте от 1 до 10 непустых кадров с камеры.");
     }
     const body = new FormData();
     frames.forEach((frame, index) => body.append("frames", frame, `frame-${index + 1}.jpg`));
-    const value = await request(`/passages/${encodeURIComponent(sessionId)}/face`, { method: "POST", body });
+    const value = await request(`/passages/${encodeURIComponent(sessionId)}/face`, { method: "POST", body, auth: "operator" });
     return { employeeName: value.person?.fio || "", direction, outcome: value.decision === "allow" ? "allowed" : "denied",
       reason: value.reason || (value.decision === "allow" ? "Решение получено от сервера" : "Сервер отказал в проходе"),
       reasonCode: value.reason_code || null, shiftId: value.shift?.id ?? null };

@@ -1,0 +1,29 @@
+# Контекст сборки — белый список: в образ попадает только код сервиса, зависимости и то, что нужно
+# для получения весов. Фото, видео, лица, эмбеддинги, eval/out, .venv, локальные веса — никогда.
+*
+!app/
+!requirements.txt
+!models/fetch_models.sh
+!eval/bench/minifasnet/export_onnx.py
+!eval/bench/minifasnet/vendor/
+
+# Даже внутри разрешённых папок — без кэша Python и без изображений/видео.
+**/__pycache__
+**/*.pyc
+**/*.jpg
+**/*.jpeg
+**/*.png
+**/*.webp
+**/*.heic
+**/*.heif
+**/*.gif
+**/*.bmp
+**/*.tif
+**/*.tiff
+**/*.mov
+**/*.mp4
+**/*.m4v
+**/*.avi
+**/*.webm
+**/*.npy
+**/*.npz

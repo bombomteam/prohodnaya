@@ -1,5 +1,6 @@
 import { config } from "../config.js";
 import { api, appearancesFromRoutes } from "./api.js";
+import { CASE_ZONES, caseZoneById, caseZoneMetrics, caseZoneName } from "./zones.js";
 import { session, allowedPages, canEdit, canManageSite, initAuth, login, logout, demoRole, useWorker } from "./auth.js";
 import { forgetDevice } from "./device.js";
 import { createView } from "./view.js";
@@ -11,9 +12,9 @@ let entryError = "";
 let polling = false;
 const nowDate = () => new Intl.DateTimeFormat("sv-SE", { timeZone: config.timeZone || "Europe/Moscow", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
 const state = {
-  page: "overview", employees: [], groups: [], attempts: [], dashboard: null, analytics: null, shiftReport: null, personReport: null, site: null,
+  page: "overview", employees: [], groups: [], attempts: [], dashboard: null, analytics: null, shiftReport: null, personReport: null, site: null, selectedRouteId: null,
   worker: null, workerId: "", direction: "entry", challenge: null, passResult: null,
-  cameraStream: null, faceBlob: null, faceFrames: [], faceUrl: null, locationWatch: null, locationLastSent: 0,
+  cameraStream: null, faceBlob: null, faceFrames: [], faceUrl: null, captureCount: 3, employeeError: null, locationWatch: null, locationLastSent: 0,
   locationStatus: "Геолокация выключена", assistant: null, busy: false, toast: null, loadError: null, mobileMenu: false,
   filters: { from: nowDate(), to: nowDate(), hourFrom: "0", hourTo: "23", employeeIds: "" },
 };
@@ -127,7 +128,7 @@ function employees() {
     <div class="table-wrap"><table><thead><tr><th>Сотрудник</th><th>Группа / должность</th><th>Статус</th><th>Телефон</th><th></th></tr></thead><tbody>${state.employees.map(x => `<tr data-search="${esc((x.name + " " + x.company).toLowerCase())}"><td><div class="table-person"><span class="person-avatar small">${esc(initials(x.name))}</span><b>${esc(x.name)}</b></div></td><td>${esc(x.company || "—")}<br><span class="muted">${esc(x.role || "—")}</span></td><td>${x.blocked ? '<span class="badge badge-red">Заблокирован</span>' : statusBadge(x.status)}</td><td>${x.enrolled ? '<span class="badge badge-green">Привязан</span>' : '<span class="badge badge-amber">Не привязан</span>'}</td><td><button class="text-button" data-action="edit-employee" data-id="${esc(x.id)}">Изменить →</button><button class="text-button" data-action="enroll-code" data-id="${esc(x.id)}">Enroll-код</button>${config.mode === "demo" ? `<button class="text-button" data-action="revoke-device" data-id="${esc(x.id)}">Отозвать ключ</button>` : ""}<button class="text-button" data-action="deactivate" data-id="${esc(x.id)}" ${x.blocked ? "disabled" : ""}>Деактивировать</button></td></tr>`).join("")}</tbody></table></div>${!state.employees.length ? '<div class="empty">Пока нет сотрудников. Добавьте первого человека.</div>' : ""}</section>
     ${state.enrollCode ? `<div class="panel"><b>Одноразовый enroll-код</b><p>${esc(state.enrollCode.code)} · до ${dateTime(state.enrollCode.expiresAt)}</p><p>Передайте лично рабочему. Код не является пропуском.</p></div>` : ""}
     ${config.mode === "api" ? `<section class="panel"><h2>Новая группа</h2><form id="group-form" class="filters-form"><label>Название<input name="name" required></label><label>Родительская группа<select name="parentId"><option value="">Нет</option>${state.groups.map(group => `<option value="${esc(group.id)}">${esc(group.name)}</option>`).join("")}</select></label><button class="button button-outline">Добавить группу</button></form></section>` : ""}
-    <dialog id="employee-dialog" class="modal"><form id="employee-form" class="modal-form"><div class="modal-heading"><div><div class="eyebrow">АДМИНИСТРИРОВАНИЕ</div><h2 id="employee-dialog-title">Новый сотрудник</h2></div><button type="button" class="icon-button" data-action="close-dialog" aria-label="Закрыть">×</button></div><input type="hidden" name="employeeId"><label>ФИО <input name="name" required placeholder="Иванов Иван Иванович"></label><div class="form-grid">${config.mode === "api" ? `<label>Группа <select name="groupId"><option value="">Без группы</option>${state.groups.map(group => `<option value="${esc(group.id)}">${esc(group.name)}</option>`).join("")}</select></label>` : '<label>Организация <input name="company" placeholder="Название подрядчика"></label>'}<label>Должность <input name="role" placeholder="Специальность"></label></div><label class="upload-box"><span class="upload-icon">▧</span><b>Эталонное фото</b><small>Один человек в кадре, лицо видно чётко.</small><input name="referencePhoto" type="file" accept="image/jpeg,image/png,image/webp" id="photo-input"><span id="file-name" class="file-name">Выбрать файл</span></label><div class="modal-actions"><button type="button" class="button button-outline" data-action="close-dialog">Отмена</button><button class="button button-primary" type="submit">Сохранить</button></div></form></dialog>`;
+    <dialog id="employee-dialog" class="modal"><form id="employee-form" class="modal-form"><div class="modal-heading"><div><div class="eyebrow">АДМИНИСТРИРОВАНИЕ</div><h2 id="employee-dialog-title">Новый сотрудник</h2></div><button type="button" class="icon-button" data-action="close-dialog" aria-label="Закрыть">×</button></div><input type="hidden" name="employeeId"><label>ФИО <input name="name" required placeholder="Иванов Иван Иванович"></label><div class="form-grid">${config.mode === "api" ? `<label>Группа <select name="groupId"><option value="">Без группы</option>${state.groups.map(group => `<option value="${esc(group.id)}">${esc(group.name)}</option>`).join("")}</select></label>` : '<label>Организация <input name="company" placeholder="Название подрядчика"></label>'}<label>Должность <input name="role" placeholder="Специальность"></label></div><label class="upload-box"><span class="upload-icon">▧</span><b>Эталонное фото</b><small>Один человек в кадре, лицо видно чётко.</small><input name="referencePhoto" type="file" accept="image/jpeg,image/png,image/webp" id="photo-input"><span id="file-name" class="file-name">Выбрать файл</span></label>${state.employeeError ? `<div class="error-banner" role="alert">${esc(state.employeeError)}</div>` : ""}<div class="modal-actions"><button type="button" class="button button-outline" data-action="close-dialog">Отмена</button><button class="button button-primary" type="submit" ${state.busy ? "disabled" : ""}>Сохранить</button></div></form></dialog>`;
 }
 
 function gate() {
@@ -135,8 +136,8 @@ function gate() {
   const apiMode = config.mode === "api";
   return `<div class="gate-layout"><div class="gate-main"><section class="panel"><div class="step-heading"><span class="step-number">01</span><div><h2>Выберите операцию</h2><p>Начните новый запрос на проход</p></div></div><div class="segment"><button class="${state.direction === "entry" ? "selected" : ""}" data-action="direction" data-value="entry">↗ Вход на объект</button><button class="${state.direction === "exit" ? "selected" : ""}" data-action="direction" data-value="exit">↙ Выход с объекта</button></div><button class="button button-primary wide" data-action="create-challenge" ${state.busy ? "disabled" : ""}>Создать запрос</button></section>
     <section class="panel"><div class="step-heading"><span class="step-number">02</span><div><h2>Подтверждение с телефона</h2><p>${apiMode ? "Передайте рабочему QR-данные для подписи на телефоне" : "Рабочий вводит одноразовый код на своём устройстве"}</p></div></div>${c ? `<div class="challenge-box"><div><small>${apiMode ? "QR-ДАННЫЕ" : "КОД ЗАПРОСА"}</small><strong style="overflow-wrap:anywhere;font-size:${apiMode ? "0.9rem" : "inherit"}">${esc(c.code)}</strong><span>Действует до ${time(c.expiresAt)}</span></div><span class="badge ${c.status === "confirmed" ? "badge-green" : c.status === "expired" ? "badge-red" : "badge-amber"}">${c.status === "confirmed" ? "Подтверждено" : c.status === "expired" ? "Истёк" : "Ожидание телефона"}</span></div>` : '<div class="empty compact">Сначала создайте запрос.</div>'}</section>
-    <section class="panel"><div class="step-heading"><span class="step-number">03</span><div><h2>${apiMode ? "Три кадра лица" : "Снимок лица"}</h2><p>Лицо сравнивает сервер с эталонным фото</p></div></div><div class="camera-box">${state.faceUrl ? `<img src="${state.faceUrl}" alt="Снимок для проверки лица">` : '<video id="camera-video" autoplay playsinline muted></video><div class="camera-placeholder" id="camera-placeholder">Камера ещё не запущена</div>'}</div><div class="camera-actions"><button class="button button-outline" data-action="start-camera">${state.cameraStream ? "↻ Переснять" : "◉ Включить камеру"}</button><button class="button button-outline" data-action="capture" ${state.cameraStream ? "" : "disabled"}>${apiMode ? "Сделать три кадра" : "Сделать снимок"}</button></div></section>
-    <button class="button button-primary wide decision-button" data-action="decide-pass" ${c?.status === "confirmed" && (apiMode ? state.faceFrames.length === 3 : state.faceBlob) && !state.busy ? "" : "disabled"}>Отправить на проверку сервера →</button>${result ? `<div class="result-card ${result.outcome}"><strong>${result.outcome === "allowed" ? "Проход разрешён" : result.outcome === "error" ? "Ошибка проверки" : result.outcome === "pending" ? "Проверка выполняется" : "Отказ в проходе"}</strong><span>${esc(result.employeeName)} · ${dirName(result.direction)}</span><p>${esc(result.reason)}</p></div>` : ""}</div>
+    <section class="panel"><div class="step-heading"><span class="step-number">03</span><div><h2>${apiMode ? "Кадры лица" : "Снимок лица"}</h2><p>Лицо сравнивает сервер с эталонным фото</p></div></div><div class="camera-box">${state.faceUrl ? `<img src="${state.faceUrl}" alt="Снимок для проверки лица">` : '<video id="camera-video" autoplay playsinline muted></video><div class="camera-placeholder" id="camera-placeholder">Камера ещё не запущена</div>'}</div>${apiMode ? `<label class="capture-settings">Кадров в серии<select id="capture-count" ${state.busy ? "disabled" : ""}>${Array.from({ length: 10 }, (_, index) => index + 1).map(count => `<option value="${count}" ${count === state.captureCount ? "selected" : ""}>${count}</option>`).join("")}</select><small>Подготовлено кадров: ${state.faceFrames.length}</small></label>` : ""}<div class="camera-actions"><button class="button button-outline" data-action="start-camera" ${state.busy ? "disabled" : ""}>${state.cameraStream ? "↻ Переснять" : "◉ Включить камеру"}</button><button class="button button-outline" data-action="capture" ${state.cameraStream && !state.busy ? "" : "disabled"}>${apiMode ? "Снять серию" : "Сделать снимок"}</button></div></section>
+    <button class="button button-primary wide decision-button" data-action="decide-pass" ${c?.status === "confirmed" && (apiMode ? (state.faceFrames.length >= 1 && state.faceFrames.length <= 10) : state.faceBlob) && !state.busy ? "" : "disabled"}>Отправить на проверку сервера →</button>${result ? `<div class="result-card ${result.outcome}"><strong>${result.outcome === "allowed" ? "Проход разрешён" : result.outcome === "error" ? "Ошибка проверки" : result.outcome === "pending" ? "Проверка выполняется" : "Отказ в проходе"}</strong><span>${esc(result.employeeName)} · ${dirName(result.direction)}</span><p>${esc(result.reason)}</p></div>` : ""}</div>
     <aside class="gate-aside"><div class="info-card"><span class="info-symbol">⌁</span><h3>Порядок прохода</h3><ol><li>Создайте запрос на вход или выход</li><li>Попросите рабочего подтвердить код на телефоне</li><li>Сделайте снимок лица перед камерой</li><li>Дождитесь решения сервера</li></ol></div><div class="note-card"><b>Ответ принимает сервер</b><p>Фронт не вычисляет совпадение лиц и не открывает смену самостоятельно.</p></div></aside></div>`;
 }
 
@@ -150,29 +151,52 @@ function worker() {
     <div class="phone-section"><h3>Геолокация</h3><p>Во время открытой смены отправляйте координаты серверу с интервалом ${Math.round((apiMode ? Math.max(30000, config.locationIntervalMs) : config.locationIntervalMs) / 1000)} сек. ${apiMode ? "Статус смены в API не доступен; приём определяет сервер." : ""}</p><div class="location-status">${esc(state.locationStatus)}</div><button class="button button-outline wide" data-action="toggle-location" ${(apiMode ? selected?.enrolled : selected?.status === "inside") ? "" : "disabled"}>${state.locationWatch === null ? "Включить геолокацию" : "Остановить передачу"}</button></div></div></div><div class="phone-explainer"><div class="eyebrow">ИНТЕРФЕЙС РАБОЧЕГО</div><h2>Личный телефон вместо бумажного пропуска</h2><p>На телефоне рабочий подтверждает одноразовый запрос проходной. После входа его местоположение передаётся в пределах открытой смены.</p><div class="note-card"><b>Для работы камеры, ключа устройства и геолокации</b><p>Открывайте сайт по HTTPS или на localhost. Разрешения браузера выдаются пользователем.</p></div></div></div>`;
 }
 
+function zoneMap(site, data, route) {
+  const visits = route ? appearancesFromRoutes([route], data.zones).reverse() : [];
+  const configured = CASE_ZONES.map(name => site.zones?.find(zone => caseZoneName(zone.name) === name));
+  const width = Number(site.width), height = Number(site.height);
+  const hasPlan = Boolean(site.planImageUrl && width > 0 && height > 0 && configured.every(zone =>
+    Array.isArray(zone?.polygon) && zone.polygon.length >= 3 && zone.polygon.every(point =>
+      Array.isArray(point) && point.length === 2 && point.every(value => Number.isFinite(Number(value))))));
+  if (hasPlan) {
+    const polygons = configured.map((zone, index) => `<polygon points="${zone.polygon.map(point => `${Number(point[0])},${Number(point[1])}`).join(" ")}" class="plan-zone ${visits.some(visit => visit.zoneName === CASE_ZONES[index]) ? "visited" : ""}"><title>${esc(CASE_ZONES[index])}</title></polygon>`).join("");
+    const points = (route?.points || []).filter(point => point.x != null && point.y != null && Number.isFinite(Number(point.x)) && Number.isFinite(Number(point.y)));
+    const path = points.length > 1 ? `<polyline class="plan-route" points="${points.map(point => `${Number(point.x)},${Number(point.y)}`).join(" ")}"/>` : "";
+    const dots = points.map((point, index) => `<circle class="plan-route-point" cx="${Number(point.x)}" cy="${Number(point.y)}" r="6"><title>Точка ${index + 1}: ${dateTime(point.at)}</title></circle>`).join("");
+    return `<div class="site-plan" style="aspect-ratio:${width}/${height}"><img src="${esc(site.planImageUrl)}" alt="План площадки"><svg viewBox="0 0 ${width} ${height}" aria-label="Зоны и маршрут работника">${polygons}${path}${dots}</svg></div><p class="metric-note">Контуры и маршрут взяты из плана и координат сервера.</p>`;
+  }
+  return `<div class="case-zone-map" role="list" aria-label="Три зоны из материалов кейса">${CASE_ZONES.map((name, index) => {
+    const matches = visits.map((visit, step) => ({ visit, step })).filter(item => item.visit.zoneName === name);
+    const photo = ["betonomeshalka.jpg", "kotlovan.jpg", "kurilka.jpg"][index];
+    return `<div class="case-zone-card ${matches.length ? "visited" : ""}" role="listitem"><img src="src/assets/${photo}" alt="Фото зоны ${esc(name)} из материалов кейса" loading="lazy"><span class="case-zone-number">0${index + 1}</span><b>${esc(name)}</b><small>${route ? matches.length ? `Точки маршрута: ${matches.map(item => item.step + 1).join(", ")}` : "Нет точек работника" : "Зона площадки"}</small></div>`;
+  }).join("")}</div><p class="metric-note">Фотографии взяты из материалов кейса. Расположение блоков условное: геопривязка зон не предоставлена. Линия на плане появится после загрузки плана и калибровки сервером.</p>`;
+}
+
 function mapView() {
   const site = state.site, data = state.analytics;
   if (!site || !data) return '<div class="panel loading">Загружаем аналитику…</div>';
   const apiMode = config.mode === "api";
-  const appearances = appearancesFromRoutes(data.routes, data.zones);
-  const max = Math.max(1, ...data.zones.map(zone => Number(zone.count) || 0));
-  const zoneRows = data.zones.map(zone => {
-    const value = Number(zone.count) || 0;
-    const level = value === 0 ? "empty" : zone.level === "low" || value / max < .35 ? "low" : "active";
-    const label = level === "empty" ? "Нет посещений" : level === "low" ? "Малая активность" : "Активная зона";
-    return `<div class="zone-activity"><div><b>${esc(zone.name)}</b><small class="zone-activity-label ${level}">${label}</small></div><div class="zone-activity-track" aria-hidden="true"><span class="${level}" style="width:${value === 0 ? 0 : Math.max(5, value / max * 100)}%"></span></div><strong>${esc(new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 1 }).format(value))} ${apiMode ? "мин" : "точек"}</strong></div>`;
+  const zones = caseZoneMetrics(data.zones);
+  const people = [...new Map([...state.employees, ...data.routes.map(route => ({ id: route.employeeId, name: route.employeeName }))]
+    .map(person => [String(person.id), person])).values()].sort((a, b) => a.name.localeCompare(b.name, "ru"));
+  const selected = people.find(person => String(person.id) === state.selectedRouteId);
+  const route = data.routes.find(item => String(item.employeeId) === state.selectedRouteId);
+  const visits = route ? appearancesFromRoutes([route], data.zones).reverse() : [];
+  const max = Math.max(1, ...zones.map(zone => zone.count));
+  const zoneRows = zones.map(zone => {
+    const level = !zone.available ? "unavailable" : zone.count === 0 ? "empty" : zone.level === "low" || zone.count / max < .35 ? "low" : "active";
+    const label = level === "unavailable" ? "Нет данных сервера" : level === "empty" ? "Нет посещений" : level === "low" ? "Малая активность" : "Активная зона";
+    return `<div class="zone-activity"><div><b>${esc(zone.name)}</b><small class="zone-activity-label ${level}">${label}</small></div><div class="zone-activity-track" aria-hidden="true"><span class="${level}" style="width:${zone.available && zone.count ? Math.max(5, zone.count / max * 100) : 0}%"></span></div><strong>${zone.available ? `${esc(new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 1 }).format(zone.count))} ${apiMode ? "мин" : "точек"}` : "—"}</strong></div>`;
   }).join("");
   const report = apiMode
-    ? `<section class="report-block"><h2>Табель сотрудника</h2><form id="person-report-form" class="filters-form"><label>Сотрудник <select name="personId" required><option value="">Выберите</option>${state.employees.map(person => `<option value="${esc(person.id)}" ${state.personReport?.person?.id == person.id ? "selected" : ""}>${esc(person.name)}</option>`).join("")}</select></label><button class="button button-outline">Получить отчёт</button></form>${state.personReport ? `<div class="report-row"><b>${esc(state.personReport.person?.fio || "Сотрудник")}</b><span>${Number(state.personReport.days_present || 0)} дней</span><strong>${Number(state.personReport.total_worked_minutes || 0)} мин</strong></div>${(state.personReport.shifts || []).map(shift => `<div class="report-row"><b>${dateTime(shift.started_at)}</b><span>${dateTime(shift.ended_at)}</span><strong>${Number(shift.worked_minutes || 0)} мин</strong></div>`).join("")}` : '<p class="metric-note">API предоставляет табель отдельно по сотруднику. Список пополняется людьми из текущего присутствия и маршрутов выбранного периода.</p>'}</section>`
+    ? `<section class="report-block"><h2>Табель сотрудника</h2><form id="person-report-form" class="filters-form"><label>Сотрудник <select name="personId" required><option value="">Выберите</option>${people.map(person => `<option value="${esc(person.id)}" ${state.personReport?.person?.id == person.id ? "selected" : ""}>${esc(person.name)}</option>`).join("")}</select></label><button class="button button-outline">Получить отчёт</button></form>${state.personReport ? `<div class="report-row"><b>${esc(state.personReport.person?.fio || "Сотрудник")}</b><span>${Number(state.personReport.days_present || 0)} дней</span><strong>${Number(state.personReport.total_worked_minutes || 0)} мин</strong></div>${(state.personReport.shifts || []).map(shift => `<div class="report-row"><b>${dateTime(shift.started_at)}</b><span>${dateTime(shift.ended_at)}</span><strong>${Number(shift.worked_minutes || 0)} мин</strong></div>`).join("")}` : '<p class="metric-note">API предоставляет табель отдельно по сотруднику.</p>'}</section>`
     : `<section class="report-block"><h2>Табель по людям</h2>${state.shiftReport?.people.length ? state.shiftReport.people.map(person => `<div class="report-row"><b>${esc(person.employeeName)}</b><span>${person.shiftCount} смен</span><strong>${Math.floor(person.workedMinutes / 60)} ч ${String(person.workedMinutes % 60).padStart(2, "0")} мин</strong></div>`).join("") : '<div class="empty compact">Смен за выбранный период нет.</div>'}<h2>Смены</h2>${state.shiftReport?.shifts.length ? state.shiftReport.shifts.map(shift => `<div class="report-row"><b>${esc(shift.employeeName)}</b><span>${dateTime(shift.startedAt)} — ${shift.endedAt ? dateTime(shift.endedAt) : "сейчас"}</span><strong>${Math.floor(shift.workedMinutes / 60)} ч ${String(shift.workedMinutes % 60).padStart(2, "0")} мин</strong></div>`).join("") : '<div class="empty compact">Смен за выбранный период нет.</div>'}</section>`;
-  const settings = !canManageSite() ? "" : apiMode
-    ? `<section class="panel"><h2>Настройка зон</h2><form id="plan-form" class="filters-form"><label>План площадки<input name="image" type="file" accept="image/png,image/jpeg,image/webp" required></label><button class="button button-outline">Загрузить план</button></form><form id="calibration-form" class="filters-form"><label>Калибровка: три точки JSON<textarea name="points" rows="5" required>${esc(JSON.stringify(site.calibration, null, 2))}</textarea></label><button class="button button-outline">Сохранить калибровку</button></form><form id="zones-form" class="filters-form"><label>Зоны JSON: name и polygon [[x,y],…]<textarea name="zones" rows="8" required>${esc(JSON.stringify(site.zones, null, 2))}</textarea></label><button class="button button-outline">Сохранить зоны</button></form></section>`
-    : `<section class="panel"><h2>Настройка зон</h2><form id="site-form" class="filters-form"><label>Название объекта<input name="name" value="${esc(site.name)}"></label><div class="form-grid"><label>Широта юг<input name="latMin" type="number" step="any" value="${site.latMin}"></label><label>Широта север<input name="latMax" type="number" step="any" value="${site.latMax}"></label><label>Долгота запад<input name="lonMin" type="number" step="any" value="${site.lonMin}"></label><label>Долгота восток<input name="lonMax" type="number" step="any" value="${site.lonMax}"></label></div><label>Названия зон по строкам<textarea name="zones" rows="5">${esc(site.zones.join("\n"))}</textarea></label><button class="button button-outline wide">Сохранить зоны</button></form></section>`;
-  return `<div class="map-layout"><section class="panel map-panel"><div class="panel-heading"><div><h2>Где появлялись работники</h2><p>Точки геолокации за выбранный период, от новых к старым</p></div><span class="count-pill">${appearances.length}</span></div>
-    ${appearances.length ? `<div class="appearance-list" role="list">${appearances.map(entry => `<div class="appearance-item" role="listitem"><div class="appearance-person"><span class="person-avatar small">${esc(initials(entry.employeeName))}</span><b>${esc(entry.employeeName)}</b></div><span class="appearance-place">${esc(entry.zoneName)}</span><time datetime="${esc(entry.at)}">${dateTime(entry.at)}</time></div>`).join("")}</div>` : '<div class="empty compact">За выбранный период нет точек геолокации. Проверьте фильтры или передачу координат.</div>'}
-    <p class="metric-note">Каждая строка — время полученной точки; это не непрерывное присутствие в зоне. Время показано по часовому поясу объекта.</p>
-    <section class="report-block"><h2>Посещаемость зон</h2><p class="metric-note">${esc(data.metric)}. Пустые и мало посещаемые зоны отмечены отдельно.</p>${zoneRows || '<div class="empty compact">Зоны пока не настроены.</div>'}${apiMode ? `<p class="metric-note">Вне размеченных зон: ${Number(data.outsideMinutes || 0)} мин</p>` : ""}</section>${report}</section>
-    <aside class="map-side"><section class="panel"><div class="panel-heading"><div><h2>Фильтры</h2><p>Для списка и посещаемости зон</p></div></div><form id="filters-form" class="filters-form"><div class="form-grid"><label>С даты<input type="date" name="from" value="${esc(state.filters.from)}" required></label><label>По дату<input type="date" name="to" value="${esc(state.filters.to)}" required></label></div><div class="form-grid"><label>Часы с<input type="number" name="hourFrom" min="0" max="23" value="${esc(state.filters.hourFrom)}"></label><label>Часы до<input type="number" name="hourTo" min="0" max="23" value="${esc(state.filters.hourTo)}"></label></div><label>Сотрудники<select name="employeeIds" multiple size="4">${state.employees.map(person => `<option value="${esc(person.id)}" ${state.filters.employeeIds.split(",").includes(person.id) ? "selected" : ""}>${esc(person.name)}</option>`).join("")}</select><small>Без выбора — все сотрудники. Ctrl для выбора нескольких.</small></label><button class="button button-primary wide">Показать данные</button></form></section><section class="panel"><h2>Люди в маршрутах</h2>${data.routes.length ? data.routes.map(route => `<div class="route-person"><span>${esc(route.employeeName)}</span><small>${route.points.length} точек</small></div>`).join("") : '<div class="empty compact">Для выбранного периода нет маршрутов.</div>'}</section>${settings}</aside></div>`;
+  const settings = canManageSite() && apiMode ? `<section class="panel"><h2>Настройка трёх зон</h2><form id="plan-form" class="filters-form"><label>План площадки<input name="image" type="file" accept="image/png,image/jpeg,image/webp" required></label><button class="button button-outline">Загрузить план</button></form><form id="calibration-form" class="filters-form"><label>Калибровка: три точки JSON<textarea name="points" rows="5" required>${esc(JSON.stringify(site.calibration, null, 2))}</textarea></label><button class="button button-outline">Сохранить калибровку</button></form><form id="zones-form" class="filters-form">${CASE_ZONES.map((name, index) => `<label>${esc(name)}: полигон [[x,y],…]<textarea name="polygon${index}" rows="3" required>${esc(JSON.stringify(site.zones.find(zone => caseZoneName(zone.name) === name)?.polygon || []))}</textarea></label>`).join("")}<button class="button button-outline">Сохранить три зоны</button></form></section>` : "";
+  return `<div class="map-layout"><section class="panel map-panel"><div class="panel-heading"><div><h2>Схема площадки</h2><p>Бетономешалка, котлован и курилка</p></div></div>${zoneMap(site, data, route)}
+    <section id="route-detail" class="route-detail" aria-live="polite">${selected ? `<h2>Карта перемещений: ${esc(selected.name)}</h2>${visits.length ? `<ol class="route-timeline">${visits.map(visit => `<li><b>${esc(visit.zoneName)}</b><time datetime="${esc(visit.at)}">${dateTime(visit.at)}</time></li>`).join("")}</ol>` : '<div class="empty compact">Для этого работника нет точек за выбранный период.</div>'}` : '<div class="empty compact">Нажмите на ФИО работника, чтобы открыть его маршрут.</div>'}</section>
+    <section class="report-block"><h2>Посещаемость трёх зон</h2><p class="metric-note">${esc(data.metric)}. Отсутствие данных сервера отличается от нулевой активности.</p>${zoneRows}</section>${report}</section>
+    <aside class="map-side"><section class="panel"><div class="panel-heading"><div><h2>Работники</h2><p>Откройте карту по ФИО</p></div></div><div class="worker-route-cards">${people.length ? people.map(person => { const count = data.routes.find(item => String(item.employeeId) === String(person.id))?.points.length || 0; return `<button type="button" class="worker-route-card ${state.selectedRouteId === String(person.id) ? "active" : ""}" data-action="show-route" data-id="${esc(person.id)}" aria-pressed="${state.selectedRouteId === String(person.id)}" aria-controls="route-detail"><span class="person-avatar small">${esc(initials(person.name))}</span><span><b>${esc(person.name)}</b><small>${count ? `${count} точек за период` : "Нет точек за период"}</small></span><span aria-hidden="true">→</span></button>`; }).join("") : '<div class="empty compact">Сотрудников пока нет.</div>'}</div></section>
+    <section class="panel"><div class="panel-heading"><div><h2>Фильтры</h2><p>Для схемы и маршрутов</p></div></div><form id="filters-form" class="filters-form"><div class="form-grid"><label>С даты<input type="date" name="from" value="${esc(state.filters.from)}" required></label><label>По дату<input type="date" name="to" value="${esc(state.filters.to)}" required></label></div><div class="form-grid"><label>Часы с<input type="number" name="hourFrom" min="0" max="23" value="${esc(state.filters.hourFrom)}"></label><label>Часы до<input type="number" name="hourTo" min="0" max="23" value="${esc(state.filters.hourTo)}"></label></div><label>Сотрудники<select name="employeeIds" multiple size="4">${people.map(person => `<option value="${esc(person.id)}" ${state.filters.employeeIds.split(",").includes(String(person.id)) ? "selected" : ""}>${esc(person.name)}</option>`).join("")}</select><small>Без выбора — все сотрудники. Ctrl для выбора нескольких.</small></label><button class="button button-primary wide">Показать данные</button></form></section>${settings}</aside></div>`;
 }
 function assistant() {
   return `<div class="assistant-layout"><section class="panel assistant-panel"><div class="assistant-intro"><span class="assistant-mark">✦</span><div><h2>Спросите об объекте</h2><p>Ответы строятся по данным сервера. Если данных нет, помощник должен сказать об этом прямо.</p></div></div><div class="suggestions">${["Кто сейчас на объекте?", "Были ли отказы на входе за неделю и почему?", "В какой зоне вчера было больше всего людей?"].map(q => `<button data-action="suggest-question" data-question="${esc(q)}">${esc(q)} →</button>`).join("")}</div><form id="question-form" class="question-form"><textarea name="question" rows="3" placeholder="Например: кто вчера отработал меньше четырёх часов?" required></textarea><button class="button button-primary" ${state.busy ? "disabled" : ""}>Отправить вопрос</button></form>${state.assistant ? `<div class="assistant-answer"><span class="eyebrow">ОТВЕТ СИСТЕМЫ</span><p>${esc(state.assistant.answer || "Данных для ответа нет.")}</p>${state.assistant.status === "unavailable" ? '<small>Попробуйте позже после подключения сервера и модели.</small>' : ""}</div>` : ""}</section><aside class="panel summary-panel"><div class="panel-heading"><div><h2>Сводка за период</h2><p>Текст для передачи заказчику</p></div></div><form id="summary-form" class="filters-form"><label>С даты<input type="date" name="from" value="${nowDate()}" required></label><label>По дату<input type="date" name="to" value="${nowDate()}" required></label><button class="button button-outline wide" ${state.busy ? "disabled" : ""}>Сформировать сводку</button></form><div class="note-card"><b>Числа считает система</b><p>Модель формулирует текст на основе проверенных агрегатов. Фронт показывает ответ и не подставляет вымышленные цифры.</p></div></aside></div>`;
@@ -209,6 +233,12 @@ root.addEventListener("click", async (event) => {
   }
   const button = event.target.closest("[data-action]"); if (!button) return;
   const action = button.dataset.action;
+  if (action === "show-route") {
+    state.selectedRouteId = button.dataset.id;
+    render();
+    document.querySelector("#route-detail")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    return;
+  }
   if (action === "login") { try { await login(); } catch (e) { entryError = errorMessage(e); render(); } return; }
   if (action === "worker-entry") { const url = new URL(location.href); url.search = "?worker=1"; url.hash = ""; location.assign(url); return; }
   if (action === "logout") { stopLocation(); clearChallenge(); state.enrollCode = null; try { await logout(); } finally { location.assign(location.pathname); } return; }
@@ -226,6 +256,8 @@ root.addEventListener("click", async (event) => {
   if (action === "close-menu") { state.mobileMenu = false; render(); return; }
   if (action === "refresh") { await refresh(); return; }
   if (action === "new-employee" || action === "edit-employee") {
+    state.employeeError = null;
+    render();
     const employee = state.employees.find(x => x.id === button.dataset.id);
     const dialog = document.querySelector("#employee-dialog");
     dialog.querySelector("form").reset();
@@ -250,22 +282,24 @@ root.addEventListener("click", async (event) => {
     return;
   }
   if (action === "capture") {
-    const video = document.querySelector("#camera-video");
-    if (!video?.videoWidth) { notify("Подождите, пока камера начнёт показывать изображение.", "error"); return; }
-    const canvas = document.createElement("canvas"); canvas.width = video.videoWidth; canvas.height = video.videoHeight;
-    canvas.getContext("2d").drawImage(video, 0, 0);
-    if (config.mode === "api") {
-      state.faceFrames = [];
-      for (let i = 0; i < 3; i++) {
+    await run(async () => {
+      const video = document.querySelector("#camera-video");
+      if (!video?.videoWidth) throw new Error("Подождите, пока камера начнёт показывать изображение.");
+      const canvas = document.createElement("canvas"); canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+      const count = config.mode === "api" ? state.captureCount : 1;
+      const frames = [];
+      for (let i = 0; i < count; i++) {
         canvas.getContext("2d").drawImage(video, 0, 0);
         const frame = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", .88));
         if (!frame) throw new Error("Не удалось получить кадр с камеры.");
-        state.faceFrames.push(frame);
-        if (i < 2) await new Promise(resolve => setTimeout(resolve, 250));
+        frames.push(frame);
+        if (i < count - 1) await new Promise(resolve => setTimeout(resolve, 250));
       }
-      state.faceBlob = state.faceFrames[2];
-    } else state.faceBlob = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", .88));
-    state.faceUrl = URL.createObjectURL(state.faceBlob); stopCamera(); render(); return;
+      state.faceFrames = config.mode === "api" ? frames : [];
+      state.faceBlob = frames.at(-1);
+      if (state.faceUrl) URL.revokeObjectURL(state.faceUrl);
+      state.faceUrl = URL.createObjectURL(state.faceBlob); stopCamera();
+    }); return;
   }
   if (action === "decide-pass") {
     await run(async () => {
@@ -312,6 +346,7 @@ root.addEventListener("click", async (event) => {
 });
 
 root.addEventListener("change", (event) => {
+  if (event.target.id === "capture-count") { state.captureCount = Number(event.target.value); return; }
   if (event.target.id === "demo-role") {
     stopLocation(); clearChallenge(); state.enrollCode = null; demoRole(event.target.value);
     state.page = allowedPages()[0]; state.dashboard = null; state.worker = null; state.employees = []; state.attempts = [];
@@ -331,8 +366,11 @@ root.addEventListener("submit", async (event) => {
   if (form.id === "employee-form") {
     if (!canEdit()) { notify("Недостаточно прав", "error"); return; }
     const data = new FormData(form), employeeId = data.get("employeeId") || null;
+    state.employeeError = null;
     await run(async () => {
-      const result = await api.saveEmployee(employeeId, data);
+      let result;
+      try { result = await api.saveEmployee(employeeId, data); }
+      catch (error) { state.employeeError = errorMessage(error); return; }
       await refresh("employees");
       document.querySelector("#employee-dialog")?.close();
       notify(result.photoCheck?.message || "Данные сотрудника отправлены серверу.", "success");
@@ -374,18 +412,18 @@ root.addEventListener("submit", async (event) => {
         if (!Array.isArray(points) || points.length !== 3 || points.some(p => !Number.isFinite(Number(p.px)) || !Number.isFinite(Number(p.py)) || !Number.isFinite(Number(p.lat)) || !Number.isFinite(Number(p.lon)))) throw new Error("Нужны три точки с px, py, lat и lon.");
         await api.updateCalibration(points);
       } else {
-        const zones = JSON.parse(String(data.get("zones")));
-        if (!Array.isArray(zones) || zones.some(z => !z.name || !Array.isArray(z.polygon) || z.polygon.length < 3)) throw new Error("Для каждой зоны нужны имя и многоугольник из трёх точек.");
+        const zones = CASE_ZONES.map((name, index) => ({
+          id: state.site.zones.find(zone => caseZoneName(zone.name) === name)?.id,
+          name, polygon: JSON.parse(String(data.get(`polygon${index}`))),
+        }));
+        if (zones.some(zone => !Array.isArray(zone.polygon) || zone.polygon.length < 3 ||
+          zone.polygon.some(point => !Array.isArray(point) || point.length !== 2 || point.some(value => !Number.isFinite(Number(value)))))) {
+          throw new Error("Для каждой из трёх зон нужен полигон минимум из трёх точек [x,y].");
+        }
         await api.updateZones(zones);
       }
       await refresh("analytics"); notify("Изменения отправлены серверу.", "success");
     }); return;
-  }
-  if (form.id === "site-form") {
-    if (!canManageSite()) { notify("Недостаточно прав", "error"); return; }
-    const data = new FormData(form); const zones = String(data.get("zones")).split("\n").map(x => x.trim());
-    if (!zones.length || zones.length > 50 || zones.some(x => !x)) { notify("Укажите от 1 до 50 непустых названий зон.", "error"); return; }
-    await run(async () => { await api.updateSite({ name: data.get("name"), latMin: Number(data.get("latMin")), latMax: Number(data.get("latMax")), lonMin: Number(data.get("lonMin")), lonMax: Number(data.get("lonMax")), zones }, data.get("planImage")); await refresh("analytics"); notify("Привязка зон сохранена.", "success"); }); return;
   }
   if (form.id === "question-form" || form.id === "summary-form") {
     const data = new FormData(form);

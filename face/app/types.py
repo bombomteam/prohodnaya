@@ -12,14 +12,15 @@ import numpy as np
 Box = tuple[float, float, float, float]  # x1, y1, x2, y2 в пикселях кадра
 
 # Статусы качества одного кадра / эталона.
-QUALITY_STATUSES = ("ok", "no_face", "multiple_faces", "too_small", "turn_to_camera", "low_quality")
+QUALITY_STATUSES = ("ok", "no_face", "multiple_faces", "face_covered", "too_small", "turn_to_camera", "low_quality")
 
 # Коды причин и тексты для человека (face/docs/02-tasks.md). Бэкенд показывает text, код пишет в журнал.
 REASON_TEXT: dict[str, str] = {
     "ok": "Проверка лица пройдена.",
     "no_face": "Лицо не найдено. Встаньте перед камерой.",
     "multiple_people": "В кадре несколько человек. Проходите по одному.",
-    "multiple_faces": "На фото несколько лиц. Нужен портрет одного человека.",
+    "multiple_faces": "В кадре несколько лиц. Уберите фото или телефон и проходите по одному.",
+    "face_covered": "Лицо закрыто. Снимите маску или балаклаву.",
     "turn_to_camera": "Повернитесь лицом к камере.",
     "too_small": "Подойдите ближе к камере.",
     "low_quality": "Кадр нечёткий или слишком тёмный. Встаньте под свет и не двигайтесь.",
@@ -34,6 +35,8 @@ REASON_TEXT: dict[str, str] = {
     "too_large": "Файл слишком большой.",
     "reference_outdated": "Эталон снят старой версией модели, его нужно перезагрузить.",
     "internal_error": "Сбой проверки лица. Проход не разрешён.",
+    # Только для HTTP 4xx: неверный запрос к модулю (не JSON, нет поля, окно > 15 с и т. п.).
+    "bad_request": "Неверный запрос к модулю.",
 }
 # Для эталона часть текстов другая.
 REFERENCE_TEXT: dict[str, str] = {
@@ -43,6 +46,8 @@ REFERENCE_TEXT: dict[str, str] = {
     "low_quality": "Фото нечёткое, слишком тёмное или пересвеченное.",
     "no_face": "На фото не найдено лицо.",
     "multiple_people": "На фото несколько человек. Нужен портрет одного человека.",
+    "multiple_faces": "На фото несколько лиц. Нужен портрет одного человека.",
+    "face_covered": "Лицо на фото закрыто. Нужен портрет без маски и головного убора на лице.",
 }
 
 
@@ -65,6 +70,9 @@ class Face:
     quality: dict[str, float] = field(default_factory=dict)  # face_px, yaw, pitch, roll, sharpness, brightness, contrast, inside
     quality_status: str = "ok"  # один из QUALITY_STATUSES
     passive: float | None = None  # пассивный антиспуфинг: вероятность «живое» 0..1
+    # Сырые данные детектора для выравнивания (порядок точек детектора, строка YuNet). Только для
+    # models/faces.py; остальным частям не нужны. Не сериализуется.
+    raw: object = field(default=None, repr=False, compare=False)
 
 
 @dataclass
