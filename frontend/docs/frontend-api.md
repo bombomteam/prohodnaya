@@ -1,56 +1,43 @@
-# Контракт фронтенда и backend
+# Интеграция фронтенда с `feature/svyat`
 
-Статус: реализованный в адаптере проект контракта, требующий согласования с backend и отсутствующими в checkout файлами 01–08. Не заменяет их и не доказывает работу серверных проверок.
+Актуально для маршрутов и схем backend, слитого в `main` из `feature/svyat` (merge `2c66e64`). Все пути ниже имеют префикс `/api`; базовый URL задаётся `config.apiBaseUrl` либо переменной контейнера. Фронтенд хранит HTTP-адаптер в `src/api.js` и не принимает решение о проходе.
 
-## Операторы
+## Роли и вход
 
-Все операторские запросы: Authorization: Bearer access_token Keycloak, без cookie. Realm construction, public client panel, audience access-api; backend проверяет подпись/exp/iss/aud и realm-роли. 401 предлагает повторный вход, 403 сообщает недостаток прав. Токены только в памяти. Timeout 15 секунд; автоматического повтора мутирующих запросов нет.
+- `admin`: сотрудники, группы, журнал, присутствующие.
+- `controller`: создание прохода, опрос сессии, отправка кадров.
+- `manager`: присутствующие, журнал, план, зоны, аналитика, отчёт, помощник.
+- `worker`: привязка устройства, подпись прохода, отправка координат без операторского токена.
 
-| Маршрут | Права и данные |
-| --- | --- |
-| GET /employees; POST /employees; PATCH /employees/:id | admin; FormData name/company/role (специальность, не IAM-роль)/referencePhoto; сервер проверяет эталон |
-| POST /employees/:id/enroll-code | admin; ответ code/expiresAt; выпуск нового одноразового кода |
-| DELETE /employees/:id/device | admin; отзыв ключа |
-| POST /employees/:id/deactivate | admin; сервер запрещает при открытой смене |
-| GET /reports/people | admin/manager; минимальный список id/name для фильтров, не административный реестр |
-| GET /dashboard; GET /passes/attempts | admin/manager; присутствующие и журнал |
-| POST /passes/challenges; GET /passes/challenges/:id | controller; direction entry/exit, ответ id/code/direction/expiresAt/status |
-| POST /passes/attempts | controller; FormData challengeId/direction/faceImage, Idempotency-Key; атомарное серверное решение |
-| GET /site; GET /analytics; GET /reports/shifts | admin/manager; общие фильтры from/to/hourFrom/hourTo/employeeIds |
-| PUT /site | admin; JSON name/latMin/latMax/lonMin/lonMax/zones; при загрузке плана multipart metadata(JSON)/planImage |
-| POST /assistant/questions; POST /assistant/summaries | admin/manager; question или from/to, ответ status/answer |
+Backend защищает операторские маршруты Bearer JWT Keycloak. В этой ветке нет `/auth/config`, `/auth/exchange`, `/auth/refresh`, `/auth/logout`, которые использует браузерный PKCE-клиент. Поэтому обычный вход оператора до их реализации не работает. Для локальной проверки API можно открыть `http://localhost:8080/?devRole=admin`, `manager` или `controller` при `AUTH_DEV_BYPASS=true` на backend. Этот режим ограничен браузерным localhost; сервер должен отдельно включить bypass. Рабочий открывает `?worker=1`.
 
-Форматы аналитики и отчётов остаются как в существующем UI: zones(id/name/count), routes(employeeId/employeeName/points(x/y/at)), metric, totalPoints; отчёт shifts(id/employeeName/startedAt/endedAt/workedMinutes), people(employeeName/shiftCount/workedMinutes). Сайт может вернуть planImageUrl; фронт рисует план под сеткой зон. Расположение зон и калибровку backend обязан согласовать с этой сеткой или заменить представление вместе с адаптером. Сетка больше не ограничена девятью зонами.
+## Администратор
 
-Журнал/результат: outcome allowed/denied/pending/error, reason, employeeName, at, direction. Сервер принимает решение, UI его отображает; один Idempotency-Key сохраняется для повторной отправки текущего действия после сетевой ошибки.
+- `GET /groups`, `POST /groups` (`name`, `parent_id`), `GET /persons`: группы и таблица; `PersonOut` содержит `fio`, `position`, `group`, `status`, `on_site`, `has_face`, `has_active_device`.
+- `POST /persons`, `PATCH /persons/{id}`: multipart с `fio`, `position`, `group_id`, `photo`; для создания фото обязательно.
+- `POST /persons/{id}/enroll-code`: выдаёт `code`, `enroll_url`, `expires_at`.
+- `PATCH /persons/{id}` со `status=blocked`: блокировка. Маршрута отзыва конкретного устройства пока нет.
+- `GET /events`: журнал попыток. `GET /site/now`: присутствующие; сервер пока не даёт общего количества людей и числа отказов за сегодня.
 
-## Предложение ECDSA device-v1 — требует явного включения
+## Проходная и телефон
 
-GET /worker/config с ответом {"deviceProtocol":"device-v1"} включает следующий адаптер; до подтверждения сервером значение пустое и не позволяет подписывать/отправлять неподтверждённый протокол. Рабочий не логинится в Keycloak, WebAuthn не используется.
+1. `POST /passages` с `{direction:"in"|"out"}` создаёт `session_id`, `nonce`, `qr_payload`, `expires_at`.
+2. Рабочий передаёт открытый JWK через `POST /enroll` с кодом. Закрытый ECDSA P-256 ключ остаётся в IndexedDB как неизвлекаемый `CryptoKey`.
+3. Рабочий вставляет JSON из `qr_payload` (`sid`, `n`, `d`). Подпись ECDSA SHA-256 ставится на точные UTF-8 байты `session_id|nonce|direction`; raw `r||s` кодируется base64url без padding. `POST /passages/{id}/sign` принимает `device_id`, `signature`.
+4. Контролёр опрашивает `GET /passages/{id}` до `signed`, затем снимает три JPEG-кадра и отправляет их multipart под повторяющимся полем `frames` в `POST /passages/{id}/face`. Решение `allow`/`deny` приходит только от сервера.
+5. Рабочий отправляет `POST /locations`: `device_id`, точная JSON-строка `payload` с `ts` и `points[{ts,lat,lon,accuracy}]`, а также ECDSA-подпись точных байтов этой строки. Сервер отвечает `accepted`/`rejected`.
 
-- ECDSA P-256, SHA-256; закрытый CryptoKey extractable=false сохраняется в IndexedDB, открытый ключ — JWK.
-- Подписываются UTF-8 байты JSON.stringify объекта строго в порядке: version, method, path, body, nonce, timestamp. version=1, method uppercase, path относительно API без префикса, отсутствующее body=null. Вложенное body сериализуется с порядком полей отправленного запроса; сервер должен воспроизвести байты без сортировки/округления/переименования. Подпись WebCrypto — raw r||s, base64url без padding, не DER.
-- Proof: keyId, nonce, timestamp, signature. Для обычных запросов JSON proof передаётся в X-Device-Proof; при регистрации находится в body.proof.
-- POST /enroll/options (без IAM): code/publicKey → nonce. POST /enroll: code/publicKey/proof → keyId. Подписываемое body регистрации — только code/publicKey, без самого proof. Код и challenge сервер связывает с ключом и человеком; private key не передаётся.
-- POST /worker/nonce (без IAM): keyId/method/path → nonce; сервер выдаёт ограниченный по сроку challenge и связывает с запросом/ключом. Подпись и свежесть проверяются до доступа к данным. Rate limit, TTL и защита от повтора — обязательные серверные обязанности.
-- GET /worker/me — подписан, ответ employee или отсутствие привязки. До первой регистрации UI не вызывает его.
-- POST /worker/pass/options — подписанное body code → challengeId/direction/nonce. Подтверждение nonce относится к этой попытке и её направлению.
-- POST /worker/pass/confirm — подписанное body challengeId/direction, используется nonce из options. Сервер проверяет ключ, принадлежность и срок, затем отдельно требуется лицо на проходной.
-- POST /locations — подписанное body shiftId/batchId/source=phone/points[{latitude,longitude,accuracy,capturedAt}]. Одна измеренная точка может составлять пачку. Сервер не доверяет source и владельцу из тела, устанавливает их по зарегистрированному ключу. Повторы batchId не дублируют события.
+В backend пока нет `/worker/me`, поэтому статус своей смены на телефоне неизвестен. Сервер обязан ограничивать приём геолокации открытой сменой. Не реализованы идемпотентность регистрации/прохода и восстановление ключа после сбоя ответа.
 
-Если финальные 01–08 используют другой формат, изменить device.js и api.js до включения API, а не подгонять backend к этому предложению. После потери ответа /enroll серверу нужен безопасный повтор/восстановление для того же ключа; текущий клиент сохраняет ключ до отправки, но серверная идемпотентность ещё должна быть согласована.
+## Руководитель
 
-## Ограничения
+- `GET /site/plan`: размеры изображения, калибровка и многоугольники зон в пикселях. `PUT /site/plan` принимает `image`; `PUT /site/calibration` принимает ровно три точки `{px,py,lat,lon}`; `PUT /zones` заменяет список зон `{name,polygon}`.
+- `GET /analytics/heatmap` и `/analytics/routes`: фильтры `from`, `to`, `hour_from`, `hour_to`, `person_ids`. Тепловая карта считает минуты по зонам, маршруты используют пиксельные `x,y`.
+- `GET /reports/person/{id}?from&to`: табель конкретного сотрудника. Общего `/reports/shifts` нет. Список сотрудников для выбора из `/site/now` содержит только тех, кто сейчас внутри.
+- `POST /assistant/ask` с `question`; `POST /assistant/summary` с `date_from`, `date_to`. Ответ `{status,text,facts_used}`.
 
-Формат калибровки и защищённый протокол должны быть подтверждены реальным backend. Фронт не выполняет распознавание и не реализует nonce-хранилище. Обновление challenge позволяет увидеть статус после ошибки, но отдельный endpoint восстановления окончательного решения должен быть согласован; повтор не считается безопасным без серверной идемпотентности.
+`image_url` текущего stub-плана равен `/files/plan/plan.png`, но маршрута файла в backend нет. Интерфейс показывает зоны без фонового изображения, пока backend не начнёт отдавать доступный URL.
 
-## Предложение интеграции PKCE без браузерных зависимостей
+## Статус backend
 
-Следующие endpoints пока требуют реализации на backend. Все HTTP-запросы идут через api.js. Пароль оператор вводит только в Keycloak.
-
-- GET /auth/config → authorizationEndpoint (HTTPS, кроме localhost). Realm и клиент фиксированы командой; endpoint авторизации Keycloak.
-- POST /auth/exchange: code, codeVerifier, redirectUri → accessToken, refreshToken, expiresIn (секунды), user {name, preferred_username, roles}. Backend обменивает code у Keycloak, проверяет подпись/exp/iss/aud и возвращает проверенный профиль. Разрешённые redirectUri задаются allowlist. Public client panel не требует браузерного секрета.
-- POST /auth/refresh: refreshToken → тот же ответ; сервер проверяет новый access token.
-- POST /auth/logout: refreshToken → завершение сессии/отзыв refresh token. Самостоятельно живущий access token имеет короткий срок действия.
-
-Браузер генерирует PKCE S256 и state. Только временные verifier/state/redirectUri сохраняются в sessionStorage для перехода в Keycloak; callback проверяет state и срок десять минут. Токены хранятся только в памяти. Backend не логирует code, verifier и токены, ограничивает CORS и частоту запросов. Это отдельное решение, требующее согласования команды; живой Keycloak этим локальным прогоном не проверялся.
+Маршруты и Pydantic-схемы есть в `feature/svyat`, но большинство обработчиков помечены `STUB`: данные и разрешение прохода возвращаются фиктивно, подписи и лица ещё не проверяются, хранилища нет. Backend уже слит в `main` (merge `2c66e64`). Совпадение HTTP-контракта не означает готовность безопасного допуска или сквозной работы на стенде.

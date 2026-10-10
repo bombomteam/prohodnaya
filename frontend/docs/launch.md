@@ -1,13 +1,11 @@
 # Запуск и интеграция
 
-Локально из frontend: `python -m http.server 8080`, затем открыть http://localhost:8080. Node.js нужен только для `npm test` и `npm run build:pages`, npm-пакеты не устанавливаются.
+Локально из `frontend`: `python -m http.server 8080`, затем открыть http://localhost:8080. Проверка: `npm test` и `npm run build:pages`.
 
-В config.js для локального API-режима изменяются только mode и apiBaseUrl. В контейнере конфигурация генерируется существующим entrypoint; настройки описаны в [инструкциях](../AGENTS.md). Docker, Compose и CI этой правкой не меняются.
+Для API-режима измените только `mode: "api"` и `apiBaseUrl` в `config.js`; например `http://localhost:8000/api`. Контейнер генерирует `config.js` при старте из переменных окружения. Backend должен разрешить origin фронта через `CORS_ORIGINS=http://localhost:8080` при раздельных портах.
 
-Операторы: backend должен реализовать /auth/config, /auth/exchange, /auth/refresh, /auth/logout из [контракта](frontend-api.md). До этого вход не работает. Это предложение интеграции, а не уже существующие endpoints. Realm construction, public client panel, audience access-api. Callback URL нужно разрешить на сервере и в Keycloak. Пароль вводится на странице Keycloak.
+Операторские запросы требуют Bearer JWT. В `feature/svyat` нет маршрутов `/auth/*` для браузерного PKCE-входа. Для локального тестирования stub API запустите backend с `AUTH_DEV_BYPASS=true` и откройте `?devRole=admin`, `?devRole=manager` либо `?devRole=controller` на localhost. Не включайте bypass на публичном стенде. Для рабочего используйте `?worker=1`.
 
-Рабочий открывает ?worker=1 и вводит одноразовый enroll-код. Backend /worker/config разрешает согласованный протокол device-v1; без него подпись блокируется. Финальный протокол сверить с документами 01–08 до интеграции. Секреты и токены не помещать в config.js.
+Камера, геолокация и WebCrypto требуют HTTPS или localhost. HTTP-стенд на телефоне не обеспечивает этот сценарий; HTTPS настраивает ответственный за инфраструктуру. При смене origin ключ устройства из IndexedDB недоступен, нужна новая привязка.
 
-Камера, геолокация и WebCrypto требуют HTTPS или localhost. HTTP-стенд на телефоне не обеспечивает этот сценарий; HTTPS настраивает ответственный за инфраструктуру. Новый домен означает другое хранилище ключа устройства.
-
-Стенд обновляется вручную. Данная локальная проверка не означает обновления сервера.
+Подробнее: [контракт](frontend-api.md), [ограничения](limitations.md). Стенд обновляется вручную; push в `main` запускает Pages и сборку образа, но не выкладывает контейнер на сервер.

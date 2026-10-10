@@ -1,5 +1,6 @@
 # Веса моделей — не в Git: скачиваются скриптом или при сборке образа.
-models/
+/models/*
+!/models/fetch_models.sh
 *.onnx
 *.pt
 *.pth
