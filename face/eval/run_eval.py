@@ -29,7 +29,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from evalkit import imaging as im  # noqa: E402
 from evalkit.adapters import Pipeline, analyze_image, cosine, describe_adapter, load_adapter  # noqa: E402
-from evalkit.labels import PROBE_EXPECTED, REPO_ROOT, SPOOF_KINDS, is_inside, load_labels  # noqa: E402
+from evalkit.labels import (  # noqa: E402
+    DISPUTED_EXPECTED, PROBE_EXPECTED, REPO_ROOT, SPOOF_KINDS, is_inside, load_labels,
+)
 from evalkit.metrics import (  # noqa: E402
     section_gate, section_liveness, section_pairs, section_people, section_references,
     section_replay, section_seq, section_spoofs, section_timing,
@@ -494,7 +496,8 @@ def honest_ref_stats(items: list[dict], enrolled: dict) -> tuple[list[float], di
     sims, hashes = [], {h: [] for h in HASH_KEYS}
     for it in items:
         row, a = it["row"], it["a"]
-        if row.is_clip or row.kind != "gate" or a is None or a["emb"] is None or a["gate_q"][0] != "ok":
+        if (row.is_clip or row.kind != "gate" or a is None or a["emb"] is None or a["gate_q"][0] != "ok"
+                or row.gate_expected in DISPUTED_EXPECTED):
             continue
         ref = enrolled.get(row.key)
         if ref is None:
@@ -512,7 +515,8 @@ def honest_frame_stats(items: list[dict]) -> tuple[list[float], dict]:
     by_key: dict = {}
     for it in items:
         row, a = it["row"], it["a"]
-        if row.is_clip or row.kind != "gate" or a is None or a["emb"] is None or a["gate_q"][0] != "ok":
+        if (row.is_clip or row.kind != "gate" or a is None or a["emb"] is None or a["gate_q"][0] != "ok"
+                or row.gate_expected in DISPUTED_EXPECTED):
             continue
         by_key.setdefault(row.key, []).append(a)
     sims, hashes = [], {h: [] for h in HASH_KEYS}
