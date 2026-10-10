@@ -133,7 +133,7 @@ services:
       LLM_EXTERNAL_MODEL: ${LLM_EXTERNAL_MODEL:-}
       LLM_API_KEY: ${LLM_API_KEY:-}
       OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:1.5b}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b}
       LLM_TIMEOUT_S: ${LLM_TIMEOUT_S:-60}
     depends_on:
       db:
@@ -293,7 +293,7 @@ services:
         exec ollama serve
     environment:
       OLLAMA_HOST: 0.0.0.0:11434
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:1.5b}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b}
       # Держать модель в памяти между вопросами (по умолчанию 5 минут): на показе не ждать повторной загрузки.
       OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30m}
     volumes:

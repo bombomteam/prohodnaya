@@ -299,3 +299,120 @@ async def test_old_intents_still_routed(monkeypatch, requests_seen):
     monkeypatch.setattr(client, "_transport", _answering("На объекте 1 человек.", requests_seen))
     assert (await llm.ask("Кто сейчас на объекте?", MoreFacts())).facts_used["count"] == 1
     assert "summary" in (await llm.ask("Сводка за день", MoreFacts())).facts_used
+
+
+# ---- формулировки и проверки качества (промпты по замерам на стенде) ----
+
+def _user_body(seen):
+    return json.loads(seen[0].content)["messages"][1]["content"]
+
+
+async def test_facts_for_model_have_russian_labels_not_json_keys(monkeypatch, requests_seen):
+    """Модель видит русские подписи, а не total/recent/by_reason/reason_code, поэтому ключи не утекают в текст."""
+    monkeypatch.setattr(llm, "_today", lambda: date(2026, 10, 10))
+    rows = [{"id": 1, "ts": "2026-10-09T10:00:00+03:00", "person_id": 1, "fio": "Иванов Иван", "direction": "in",
+             "reason_code": "FACE_NO_FACE", "reason": "Лицо не найдено"},
+            {"id": 2, "ts": "2026-10-09T11:00:00+03:00", "person_id": 1, "fio": "Иванов Иван", "direction": "in",
+             "reason_code": "CODE_WRONG", "reason": None}]
+    monkeypatch.setattr(client, "_transport", _answering("Всего отказов 2: Лицо не найдено — 1, CODE_WRONG — 1.", requests_seen))
+    a = await llm.ask("Отказы за неделю и причины", MoreFacts(denials=rows))
+    assert a.status == "ok"
+    body = _user_body(requests_seen)
+    assert "всего отказов" in body and "отказы по причинам" in body and "Лицо не найдено" in body
+    for raw in ("total", "by_reason", "reason_code", "recent", "person_id", "\"count\""):
+        assert raw not in body
+    assert "последние отказы" not in body and "Отдельные отказы и людей не называй" in body
+    assert a.facts_used["total"] == 2 and "recent" in a.facts_used  # в ответе API полные факты остаются
+
+
+async def test_recent_denials_shown_to_model_only_when_asked(monkeypatch, requests_seen):
+    rows = [{"id": 1, "ts": "2026-10-09T10:00:00+03:00", "person_id": 1, "fio": "Иванов Иван", "direction": "in",
+             "reason_code": "CODE_WRONG", "reason": "Неверный код"}]
+    monkeypatch.setattr(client, "_transport", _answering("Отказ: 09.10 10:00, Иванов Иван, Неверный код. Всего 1.", requests_seen))
+    a = await llm.ask("Кто получил отказ за неделю?", MoreFacts(denials=rows))
+    assert a.status == "ok"
+    body = _user_body(requests_seen)
+    assert "последние отказы" in body and "09.10 10:00" in body and "+03:00" not in body
+
+
+async def test_system_prompt_forbids_english_and_field_names(monkeypatch, requests_seen):
+    monkeypatch.setattr(client, "_transport", _answering("На объекте 1 человек: Иванов Иван.", requests_seen))
+    await llm.ask("кто на объекте", Facts())
+    system = json.loads(requests_seen[0].content)["messages"][0]["content"]
+    assert "только по-русски" in system and "(total: 2)" in system and "только факты" in system
+    assert "в данных этого нет" in system
+
+
+async def test_inside_facts_are_trimmed_for_model(monkeypatch, requests_seen):
+    """Время «с» как ЧЧ:ММ, без last_seen_at/person_id/null; русские подписи."""
+    monkeypatch.setattr(client, "_transport", _answering("На объекте 1 человек: Иванов Иван с 08:30.", requests_seen))
+    a = await llm.ask("кто на объекте", Facts())
+    assert a.status == "ok"
+    body = _user_body(requests_seen)
+    assert '"на объекте с": "08:30"' in body and "last_seen" not in body and "person_id" not in body and "null" not in body
+    assert "2026-10-10T08:30" not in body
+    assert a.facts_used["people"][0]["since"] == "2026-10-10T08:30:00+03:00"
+
+
+async def test_false_no_data_answer_is_bad_response(monkeypatch, requests_seen):
+    """Модель сказала «данных нет», хотя в фактах есть люди: ответ отклоняется, показываем факты системы."""
+    monkeypatch.setattr(llm, "_today", lambda: date(2026, 10, 10))
+    monkeypatch.setattr(client, "_transport", _answering("данных нет", requests_seen))
+    a = await llm.ask("кто на объекте", Facts())
+    assert a.status == "bad_response" and "Иванов Иван" in a.text
+    facts = MoreFacts(less=[{"person_id": 1, "fio": "Петров Пётр", "worked_minutes": 390.0}])
+    a = await llm.ask("Кто вчера отработал меньше 8 часов?", facts)
+    assert a.status == "bad_response" and "Петров Пётр: 6 ч 30 мин" in a.text
+
+
+async def test_answer_must_name_every_person_but_declension_is_ok(monkeypatch, requests_seen):
+    monkeypatch.setattr(llm, "_today", lambda: date(2026, 10, 10))
+    less = [{"person_id": 1, "fio": "Петров Пётр", "worked_minutes": 390.0},
+            {"person_id": 2, "fio": "Сидорова Мария", "worked_minutes": 455.0}]
+    monkeypatch.setattr(client, "_transport", _answering("Меньше 8 часов: Петров Пётр (6 ч 30 мин).", requests_seen))
+    a = await llm.ask("Кто вчера отработал меньше 8 часов?", MoreFacts(less=less))
+    assert a.status == "bad_response"  # пропущена Сидорова
+    monkeypatch.setattr(client, "_transport", _answering(
+        "Двое: Петров Пётр отработал 6 ч 30 мин, у Сидоровой Марии 7 ч 35 мин.", requests_seen))
+    a = await llm.ask("Кто вчера отработал меньше 8 часов?", MoreFacts(less=less))
+    assert a.status == "ok"
+
+
+async def test_zones_answer_must_name_top_zones(monkeypatch, requests_seen):
+    monkeypatch.setattr(llm, "_today", lambda: date(2026, 10, 10))
+    rows = [{"zone_id": 1, "name": "Котлован", "minutes": 300.0, "people_count": 2},
+            {"zone_id": 2, "name": "Склад", "minutes": 90.0, "people_count": 3}]
+    monkeypatch.setattr(client, "_transport", _answering("Больше всего людей — на складе: 3.", requests_seen))
+    a = await llm.ask("В какой зоне больше всего людей?", MoreFacts(zones=rows))
+    assert a.status == "bad_response"  # нет зоны с наибольшим временем
+
+
+def test_default_ollama_model_is_7b(monkeypatch):
+    monkeypatch.delenv("OLLAMA_MODEL", raising=False)
+    from app.core.config import load_settings
+    assert load_settings().ollama_model == "qwen2.5:7b"
+
+
+async def test_utc_timestamps_shown_in_site_timezone_and_accepted_by_number_check(monkeypatch, requests_seen):
+    """Сырое «2026-10-10T13:34:07.250691+00:00» -> «10.10 16:34» (Europe/Moscow); проверка чисел это принимает."""
+    monkeypatch.setattr(llm, "_today", lambda: date(2026, 10, 10))
+    monkeypatch.setattr(llm, "settings", dataclasses.replace(llm.settings, site_tz="Europe/Moscow"))
+    rows = [{"id": 1, "ts": "2026-10-10T13:34:07.250691+00:00", "person_id": 1, "fio": "Иванов Иван", "direction": "in",
+             "reason_code": "CODE_WRONG", "reason": "Неверный код"}]
+    monkeypatch.setattr(client, "_transport", _answering("Отказ 10.10 16:34: Иванов Иван, Неверный код. Всего 1.", requests_seen))
+    a = await llm.ask("Кто получил отказ за неделю?", MoreFacts(denials=rows))
+    assert a.status == "ok"
+    body = _user_body(requests_seen)
+    assert "10.10 16:34" in body and "250691" not in body and "T13" not in body and "+00:00" not in body
+    assert a.facts_used["recent"][0]["ts"] == "2026-10-10T13:34:07.250691+00:00"  # в API факты как есть
+    monkeypatch.setattr(client, "_transport", _answering("Отказ в 17:34: Иванов Иван.", requests_seen))  # 17:34 нет ни в каком виде
+    a = await llm.ask("Кто получил отказ за неделю?", MoreFacts(denials=rows))
+    assert a.status == "bad_response"
+
+
+async def test_fallback_text_shows_human_local_time(monkeypatch, requests_seen):
+    monkeypatch.setattr(llm, "settings", dataclasses.replace(llm.settings, site_tz="Europe/Moscow"))
+    people = [{**PEOPLE[0], "since": "2026-10-10T05:05:09.123456+00:00"}]
+    monkeypatch.setattr(client, "_transport", _transport(lambda r: httpx.Response(503)))
+    a = await llm.ask("кто на объекте", Facts(people=people))
+    assert a.status == "unavailable" and "с 08:05" in a.text and "123456" not in a.text and "+00:00" not in a.text

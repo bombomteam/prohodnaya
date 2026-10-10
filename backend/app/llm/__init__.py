@@ -46,6 +46,7 @@ _ZONES = re.compile(r"\bзон", re.I)
 _DENIALS = re.compile(r"отказ|отклон|не\s+пустил|не\s+пропустил", re.I)
 _TODAY = re.compile(r"сегодня", re.I)
 _INSIDE = re.compile(r"кто|сейчас|на объекте|на территории|внутри|присутству", re.I)
+_RECENT = re.compile(r"кто|кого|когда|последн|список|перечисл", re.I)
 _SUMMARY = re.compile(r"сводк|итог|за день|за сегодня|как прошёл|как прошел|отчёт|отчет", re.I)
 
 
@@ -70,7 +71,77 @@ def _today() -> date:
 
 
 def _facts_json(facts: dict) -> str:
+    """Все факты как JSON: по нему проверяются числа ответа модели."""
     return json.dumps(facts, ensure_ascii=False, default=str, indent=1)
+
+
+# Что модели не показываем (шум и повод для выдумок), хотя в ответе API и в проверке чисел оно остаётся.
+_HIDDEN = {"person_id", "id", "zone_id", "last_seen_at", "minutes", "worked_minutes"}
+_ISO_DT = re.compile(r"\d{4}-\d\d-\d\d[T ]\d\d:\d\d.*")
+# Подписи полей для модели: иначе технические ключи (total, recent, count) попадают в текст ответа.
+_LABELS = {
+    "count": "количество", "people": "люди", "fio": "ФИО", "group": "группа", "since": "на объекте с",
+    "last_zone": "последняя зона", "date": "дата", "limit_hours": "порог в часах", "worked": "отработано",
+    "zones": "зоны", "name": "зона", "time": "время в зоне", "people_count": "людей",
+    "top_by_time": "зона с наибольшим временем", "top_by_people": "зона с наибольшим числом людей",
+    "date_from": "период с", "date_to": "период по", "total": "всего отказов", "by_reason": "отказы по причинам",
+    "reason": "причина", "recent": "последние отказы", "ts": "время", "summary": "сводка",
+    "shifts_count": "смен", "worked_hours": "отработано часов", "denials_total": "отказов в проходе",
+    "denials_by_reason": "отказы по кодам причин", "open_shifts_without_exit": "открытые смены без выхода",
+}
+
+
+def _parse_dt(value) -> datetime | None:
+    """datetime или ISO-строка с временем -> datetime в часовом поясе объекта (SITE_TZ); иное -> None."""
+    if isinstance(value, str) and _ISO_DT.fullmatch(value):
+        try:
+            value = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    if not isinstance(value, datetime):
+        return None
+    return value.astimezone(ZoneInfo(settings.site_tz)) if value.tzinfo else value
+
+
+def _human_time(moment: datetime, time_only: bool = False) -> str:
+    """«08:05» или «10.10 16:34» (с годом, если он не текущий): без секунд, микросекунд и смещения пояса."""
+    if time_only:
+        return moment.strftime("%H:%M")
+    year = f".{moment.year}" if moment.year != _today().year else ""
+    return moment.strftime("%d.%m") + year + moment.strftime(" %H:%M")
+
+
+def _model_view(value, key: str = "", hide: frozenset = frozenset()):
+    """Факты в виде для модели: русские подписи вместо ключей, без пустых значений, id и сырых минут;
+    дата-время в часовом поясе объекта: «с» как ЧЧ:ММ, остальное как ДД.ММ ЧЧ:ММ. hide — ключи исходных фактов, которые скрыть."""
+    if isinstance(value, dict):
+        if "reason_code" in value:  # причина без русского названия — показываем код, ключ reason_code не выдаём
+            value = {**value, "reason": value.get("reason") or value["reason_code"]}
+        return {_LABELS.get(k, k): _model_view(v, k, hide) for k, v in value.items()
+                if v is not None and k not in _HIDDEN and k not in hide and k != "reason_code"}
+    if isinstance(value, list):
+        return [_model_view(x, key, hide) for x in value]
+    moment = _parse_dt(value)
+    return _human_time(moment, key == "since") if moment else value
+
+
+def _model_json(facts: dict, hide: frozenset = frozenset()) -> str:
+    return json.dumps(_model_view(facts, hide=hide), ensure_ascii=False, default=str, indent=1)
+
+
+def _stem(word: str) -> str:
+    """Основа слова для поиска в падежной форме: «Сидорова» -> «сидор», «Котлован» -> «котлов»."""
+    w = word.lower()
+    return w[:max(3, len(w) - 2)]
+
+
+def _complete(answer: str, required: list[list[str]]) -> bool:
+    """Ответ упоминает каждого обязательного человека/зону/причину (хотя бы один из вариантов написания).
+
+    Ловит ложное «данных нет» и пропуски людей при непустых фактах.
+    """
+    low = answer.lower()
+    return all(any(_stem(v) in low for v in alts if v) for alts in required)
 
 
 _NUM = re.compile(r"\d+(?:[.,:\-]\d+)*")
@@ -80,6 +151,16 @@ _LIST_MARK = re.compile(r"^\s*\d+[.)]\s", re.M)
 def _parts(token: str) -> list[int]:
     """Целые части числа/даты/времени: 10.10.2026 -> [10, 10, 2026], 08:30 -> [8, 30]."""
     return [int(x) for x in re.split(r"[.,:\-]", token) if x]
+
+
+def _datetimes(value) -> list[datetime]:
+    """Все даты-время из фактов (строки ISO и datetime), в часовом поясе объекта."""
+    if isinstance(value, dict):
+        value = list(value.values())
+    if isinstance(value, list):
+        return [m for x in value for m in _datetimes(x)]
+    moment = _parse_dt(value)
+    return [moment] if moment else []
 
 
 def _numbers_ok(answer: str, facts: dict) -> bool:
@@ -92,6 +173,8 @@ def _numbers_ok(answer: str, facts: dict) -> bool:
     facts_text = _facts_json(facts)
     ints: set[int] = set()
     decimals: set[Decimal] = set()
+    for moment in _datetimes(facts):  # время в поясе объекта отличается от записи в фактах (13:34Z -> 16:34)
+        ints.update({moment.day, moment.month, moment.hour, moment.minute, moment.year, moment.year % 100})
     for token in _NUM.findall(facts_text):
         for n in _parts(token):
             ints.add(n)
@@ -114,7 +197,8 @@ def _inside_text(facts: dict) -> str:
     """Ответ только из фактов системы: кто на объекте."""
     lines = [f"На объекте сейчас: {facts['count']}."]
     for p in facts["people"]:
-        extra = ", ".join(x for x in (p.get("group"), f"с {p['since']}" if p.get("since") else None,
+        since = _parse_dt(p.get("since"))
+        extra = ", ".join(x for x in (p.get("group"), f"с {_human_time(since, True)}" if since else None,
                                       f"зона: {p['last_zone']}" if p.get("last_zone") else None) if x)
         lines.append(f"- {p['fio']}" + (f" ({extra})" if extra else ""))
     return "\n".join(lines)
@@ -135,15 +219,17 @@ def _summary_text(facts: dict) -> str:
     return "\n".join(lines)
 
 
-async def _formulate(prompt_name: str, values: dict, facts: dict, fallback: str) -> AssistantAnswer:
-    """Просит модель сформулировать ответ по фактам; при сбое или чужих числах — ответ из фактов системы."""
+async def _formulate(prompt_name: str, values: dict, facts: dict, fallback: str,
+                     required: list[list[str]] = (), hide: frozenset = frozenset()) -> AssistantAnswer:
+    """Просит модель сформулировать ответ по фактам; при сбое, чужих числах или пропуске обязательных
+    имён/зон/причин (required) — ответ из фактов системы."""
     try:
-        text = await client.complete(_prompt("system"), _prompt(prompt_name, facts=_facts_json(facts), **values))
+        text = await client.complete(_prompt("system"), _prompt(prompt_name, facts=_model_json(facts, hide), **values))
     except LLMError as e:
         log.warning("Модель недоступна: %s", e)
         return AssistantAnswer(status="unavailable", text=MODEL_DOWN + fallback, facts_used=facts)
-    if not _numbers_ok(text, facts):
-        log.warning("Ответ модели содержит числа вне фактов")
+    if not _numbers_ok(text, facts) or not _complete(text, required):
+        log.warning("Ответ модели содержит числа вне фактов или пропускает людей/зоны из фактов")
         return AssistantAnswer(status="bad_response", text=MODEL_BAD + fallback, facts_used=facts)
     return AssistantAnswer(status="ok", text=text, facts_used=facts)
 
@@ -153,7 +239,8 @@ async def _inside(question: str, facts_provider) -> AssistantAnswer:
     facts = {"count": len(people), "people": people}
     if not people:
         return AssistantAnswer(status="no_data", text=NO_DATA_INSIDE, facts_used=facts)
-    return await _formulate("who_inside", {"question": question}, facts, _inside_text(facts))
+    required = [[p["fio"].split()[0]] for p in people if p.get("fio")]
+    return await _formulate("who_inside", {"question": question}, facts, _inside_text(facts), required)
 
 
 def _stamped(answer: AssistantAnswer) -> AssistantAnswer:
@@ -187,7 +274,9 @@ async def _less(question: str, facts_provider) -> AssistantAnswer:
         return AssistantAnswer(status="no_data", text=NO_DATA_LESS.format(day=day.isoformat(), n=limit), facts_used=facts)
     lines = [f"За {day.isoformat()} отработали меньше {limit} ч: {len(people)}."]
     lines += [f"- {p['fio']}: {p['worked']}" for p in people]
-    return await _formulate("less_hours", {"question": question}, facts, "\n".join(lines))
+    required = [[p["fio"].split()[0]] for p in people if p.get("fio")]
+    values = {"question": question, "day": day.isoformat(), "limit": str(limit)}
+    return await _formulate("less_hours", values, facts, "\n".join(lines), required)
 
 
 async def _zones(question: str, facts_provider) -> AssistantAnswer:
@@ -206,7 +295,8 @@ async def _zones(question: str, facts_provider) -> AssistantAnswer:
     lines = [f"Зоны за {day.isoformat()}: больше всего времени — {facts['top_by_time']}, "
              f"больше всего людей — {facts['top_by_people']}."]
     lines += [f"- {z['name']}: {z['time']}, людей: {z['people_count']}" for z in zones]
-    return await _formulate("zones", {"question": question}, facts, "\n".join(lines))
+    required = [[facts["top_by_time"]], [facts["top_by_people"]]]
+    return await _formulate("zones", {"question": question}, facts, "\n".join(lines), required)
 
 
 async def _denials(question: str, facts_provider) -> AssistantAnswer:
@@ -219,7 +309,7 @@ async def _denials(question: str, facts_provider) -> AssistantAnswer:
         item = by_reason.setdefault(r["reason_code"], {"reason_code": r["reason_code"], "reason": r.get("reason"), "count": 0})
         item["count"] += 1
     reasons = sorted(by_reason.values(), key=lambda x: -x["count"])
-    recent = [{"ts": r["ts"], "fio": r.get("fio"), "reason": r.get("reason") or r["reason_code"]} for r in rows[:10]]
+    recent = [{"ts": r["ts"], "fio": r.get("fio"), "reason": r.get("reason") or r["reason_code"]} for r in rows[:5]]
     facts = {"date_from": date_from.isoformat(), "date_to": date_to.isoformat(), "total": len(rows),
              "by_reason": reasons, "recent": recent}
     if not rows:
@@ -227,7 +317,12 @@ async def _denials(question: str, facts_provider) -> AssistantAnswer:
                                facts_used=facts)
     lines = [f"Отказов в проходе за {facts['date_from']} — {facts['date_to']}: {len(rows)}."]
     lines += [f"- {x['reason'] or x['reason_code']} ({x['reason_code']}): {x['count']}" for x in reasons]
-    return await _formulate("denials", {"question": question}, facts, "\n".join(lines))
+    required = [[x["reason"] or "", x["reason_code"]] for x in reasons]
+    if _RECENT.search(question):  # конкретные отказы называем, только если спросили «кто/когда»
+        hide, extra = frozenset(), "Затем назови отказы из списка «последние отказы» по одному: время, ФИО, причина."
+    else:
+        hide, extra = frozenset({"recent"}), "Отдельные отказы и людей не называй."
+    return await _formulate("denials", {"question": question, "extra": extra}, facts, "\n".join(lines), required, hide)
 
 
 async def ask(question: str, facts_provider) -> AssistantAnswer:
@@ -258,4 +353,5 @@ async def summary(date_from: date, date_to: date, facts_provider, question: str 
         text = NO_DATA_SUMMARY.format(a=date_from.isoformat(), b=date_to.isoformat())
         return _stamped(AssistantAnswer(status="no_data", text=text, facts_used=facts))
     values = {"question": question, "date_from": date_from.isoformat(), "date_to": date_to.isoformat()}
-    return _stamped(await _formulate("summary", values, facts, _summary_text(facts)))
+    required = [[x["fio"].split()[0]] for x in data["open_shifts_without_exit"] if x.get("fio")]
+    return _stamped(await _formulate("summary", values, facts, _summary_text(facts), required))

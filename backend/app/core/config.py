@@ -72,7 +72,7 @@ def load_settings() -> Settings:
         llm_external_model=env("LLM_EXTERNAL_MODEL") or "",
         llm_api_key=env("LLM_API_KEY") or "",
         ollama_url=(env("OLLAMA_URL") or "http://ollama:11434").rstrip("/"),
-        ollama_model=env("OLLAMA_MODEL") or "qwen2.5:1.5b",
+        ollama_model=env("OLLAMA_MODEL") or "qwen2.5:7b",
         llm_timeout_s=float(env("LLM_TIMEOUT_S") or 60),
     )
 
