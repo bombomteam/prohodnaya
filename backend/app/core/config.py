@@ -14,6 +14,8 @@ class Settings:
     public_app_url: str
     site_tz: str
     pass_session_ttl_s: int
+    pass_code_max_attempts: int
+    pass_code_request_max_skew_s: int
     enroll_code_ttl_min: int
     face_url: str
     face_timeout_s: float
@@ -35,6 +37,8 @@ def load_settings() -> Settings:
         public_app_url=env("PUBLIC_APP_URL", ""),
         site_tz=env("SITE_TZ") or "Europe/Moscow",
         pass_session_ttl_s=_int("PASS_SESSION_TTL_S", 90),
+        pass_code_max_attempts=_int("PASS_CODE_MAX_ATTEMPTS", 5),
+        pass_code_request_max_skew_s=_int("PASS_CODE_REQUEST_MAX_SKEW_S", 30),
         enroll_code_ttl_min=_int("ENROLL_CODE_TTL_MIN", 60),
         face_url=(env("FACE_URL") or "http://face:8000").rstrip("/"),
         face_timeout_s=float(env("FACE_TIMEOUT_S") or 5),

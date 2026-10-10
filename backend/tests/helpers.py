@@ -1,5 +1,6 @@
 """Общие тестовые помощники: телефон рабочего с ключом P-256, заведение человека, активация устройства."""
 import base64
+from datetime import datetime, timezone
 
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -20,10 +21,17 @@ class Phone:
         n = self.key.public_key().public_numbers()
         self.jwk = {"kty": "EC", "crv": "P-256", "x": _b64u(n.x.to_bytes(32, "big")), "y": _b64u(n.y.to_bytes(32, "big"))}
         self.device_id: str | None = None
+        self.person_id: int | None = None  # заполняет activate
 
     def sign(self, message: str) -> str:
         r, s = decode_dss_signature(self.key.sign(message.encode(), ec.ECDSA(hashes.SHA256())))
         return _b64u(r.to_bytes(32, "big") + s.to_bytes(32, "big"))
+
+    def pass_code_body(self, ts: str | None = None, device_id: str | None = None) -> dict:
+        """Тело POST /api/device/pass-code: подпись над "pass-code|device_id|ts" (ts — строка как отправлена)."""
+        device_id = device_id or self.device_id
+        ts = ts or datetime.now(timezone.utc).isoformat()
+        return {"device_id": device_id, "ts": ts, "signature": self.sign(f"pass-code|{device_id}|{ts}")}
 
 
 def make_person(db, fio="Иванов Иван", emb="EMB", status="active", model="m1", template=True) -> int:
@@ -41,6 +49,7 @@ def activate(client, person_id: int, phone: Phone) -> None:
     r = client.post("/api/enroll", json={"code": code, "public_key_jwk": phone.jwk})
     assert r.status_code == 200, r.text
     phone.device_id = r.json()["device_id"]
+    phone.person_id = person_id
 
 
 # ---- план, калибровка и зоны ----

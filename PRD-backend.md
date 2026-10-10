@@ -11,11 +11,14 @@
 
 **Главное требование заказчика:** пройти за другого человека невозможно, и это гарантирует **сервер**. Судьи будут ломать именно это: открывать DevTools, повторять запросы, подсовывать чужие телефоны и фото.
 
-Как устроен проход:
-1. Контролёр на планшете начинает проход. Сервер создаёт сессию с одноразовым nonce, планшет показывает QR.
-2. Рабочий сканирует QR телефоном. Телефон подписывает `session_id|nonce|direction` неизвлекаемым ключом ECDSA P-256, созданным в браузере при регистрации.
-3. Планшет снимает 1–10 кадров лица (запасной режим; основной — видеопоток камеры, позже) и отправляет их на сервер.
-4. Сервер сверяет лицо с эталоном **именно того человека, чьим ключом подписано**, и принимает решение `allow` или `deny` с человеческой причиной.
+Как устроен проход (подтверждение — 6-значный код; способ подтверждения кейс оставляет команде, обязательное свойство: подтверждение нельзя переслать, скопировать, сфотографировать и использовать позже):
+1. Рабочий показывает удостоверение контролёру. Контролёр на планшете находит человека по ФИО и выбирает его (`GET /passages/people`, `POST /passages {person_id, direction}`). Сервер проверяет бизнес-правила и создаёт сессию с одноразовым 6-значным кодом. Код видит только сервер и телефон этого человека.
+2. Активированный телефон рабочего (неизвлекаемый ключ ECDSA P-256, созданный в браузере при регистрации) раз в 2–3 с опрашивает `POST /device/pass-code` подписанным запросом и показывает полученный код.
+3. Рабочий называет код, контролёр вводит его на планшете (`POST /passages/{id}/code`). Сервер сравнивает код в БД атомарно; код одноразовый, живёт `PASS_SESSION_TTL_S`, неверных попыток не больше `PASS_CODE_MAX_ATTEMPTS`.
+4. Планшет снимает 1–10 кадров лица (запасной режим; основной — видеопоток камеры, позже) и отправляет их на сервер.
+5. Сервер сверяет лицо с эталоном **именно того человека, чья сессия подтверждена кодом**, и принимает решение `allow` или `deny` с человеческой причиной. Выход — тот же сценарий с `direction=out`.
+
+Что от чего защищает. Одноразовость, TTL, ограничение попыток и выдача кода только активированному телефону защищают от «использовать позже» и «скопировать» (сохранённый, сфотографированный, подсмотренный код). От пересылки кода **в реальном времени** (рабочий диктует код тому, кто стоит перед контролёром) код не защищает: её закрывают удостоверение, которое контролёр сверяет с человеком, и проверка лица по эталону выбранного человека (плюс `gallery` других людей).
 
 Твоя зона — **только бэкенд и БД**: FastAPI, PostgreSQL, модели, миграции, все роуты, логика прохода, смены, геоточки, зоны, SQL аналитики (`queries.py`), журнал.
 
@@ -35,7 +38,7 @@
 
 - Решение о проходе принимает клиент, а сервер только записывает результат. **Все проверки — на сервере.**
 - Проверка лица отсутствует или сводится к «есть ли лицо в кадре». Сравнивается эмбеддинг кадра с эталоном конкретного человека.
-- Подтверждение статично: одно значение работает повторно. Nonce одноразовый и гасится атомарно.
+- Подтверждение статично: одно значение работает повторно. Код прохода одноразовый, гасится атомарно (UPDATE с сравнением в БД), живёт ограниченное время, число неверных попыток ограничено; наружу уходит только телефону владельца и нигде не логируется.
 - Данные хранятся в памяти процесса или в файле рядом с кодом. Всё живёт в PostgreSQL, файлы — в volume `/data`.
 - Аналитика или обстановка на заготовленных данных. Всё считается из реальных таблиц.
 - Помощник выдаёт выдуманные числа или заготовленный ответ вместо вызова модели.
@@ -71,7 +74,7 @@ backend/
       crypto.py            # verify_es256
     api/                   # роуты: без SQL и бизнес-логики, только вызов сервиса
       router.py            # common_router, /health, подключение роутеров ниже
-      persons.py groups.py enroll.py passages.py locations.py
+      persons.py groups.py enroll.py passages.py device.py locations.py
       site.py events.py analytics.py reports.py assistant.py
     schemas/               # pydantic-модели по доменам
     models/                # SQLAlchemy-модели по доменам
@@ -104,7 +107,9 @@ DATA_DIR=/data
 CORS_ORIGINS=http://localhost:5173        # через запятую; добавить адрес туннеля
 PUBLIC_APP_URL=                           # адрес фронта телефона, для ссылки активации
 SITE_TZ=Europe/Moscow                     # границы «дня» и фильтр часов считаются в этой зоне
-PASS_SESSION_TTL_S=90
+PASS_SESSION_TTL_S=90                     # жизнь сессии прохода и её кода
+PASS_CODE_MAX_ATTEMPTS=5                  # неверных вводов кода до гашения сессии
+PASS_CODE_REQUEST_MAX_SKEW_S=30           # допустимое расхождение ts запроса телефона и часов сервера
 ENROLL_CODE_TTL_MIN=60
 FACE_URL=http://face:8000                 # модуль распознавания (порог сходства — в самом модуле)
 FACE_TIMEOUT_S=5                          # таймаут = отказ FACE_SERVICE_UNAVAILABLE
@@ -170,17 +175,23 @@ CREATE TABLE devices (
   id uuid PRIMARY KEY, person_id int NOT NULL REFERENCES persons(id),
   public_key_jwk jsonb NOT NULL,
   last_location_ts timestamptz,            -- защита от повтора пачек геоточек
+  last_code_request_ts timestamptz,        -- защита от повтора запросов /device/pass-code (миграция 0004)
   created_at timestamptz NOT NULL DEFAULT now(), revoked_at timestamptz);
 
 CREATE TABLE pass_sessions (
-  id uuid PRIMARY KEY, nonce text NOT NULL,
+  id uuid PRIMARY KEY,
   direction text NOT NULL CHECK (direction IN ('in','out')),
   controller_sub text NOT NULL,
   status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','signed','decided')),
-  device_id uuid REFERENCES devices(id), person_id int REFERENCES persons(id),
+  device_id uuid REFERENCES devices(id),     -- телефон, забравший код (/device/pass-code)
+  person_id int REFERENCES persons(id),      -- выбранный контролёром человек (с создания сессии)
+  code text,                                  -- 6 цифр; NULL, как только сессия ушла из pending; у истёкшей pending-сессии обнуляется при следующем pass-code/создании сессии этого человека (статус не меняется)
+  code_attempts int NOT NULL DEFAULT 0,       -- неверных вводов кода
+  code_delivered_at timestamptz,              -- когда телефон впервые забрал код
   face_score real, decision text CHECK (decision IN ('allow','deny')),
   reason_code text, reason text,
   created_at timestamptz NOT NULL DEFAULT now(), expires_at timestamptz NOT NULL);
+-- статусы: pending (код ждёт ввода) -> signed (код принят) -> decided (решение allow/deny)
 
 CREATE TABLE shifts (
   id serial PRIMARY KEY, person_id int NOT NULL REFERENCES persons(id),
@@ -237,14 +248,14 @@ verify_camera(reference: Reference, attempt_id: str, camera_id: str, since: date
 - Модели ответов (pydantic, неизвестные поля игнорируются): `Reason{code,text}`, `ReferenceCheck`, `Reference{embedding, model_version, reference_hash}`, `VerifyResult{attempt_id, status, reason, facts, model_version}`; модель запроса `GalleryItem{id, embedding}`.
 - **`gallery`** (защита «прошёл по телефону коллеги»): эталоны всех ДРУГИХ людей со `status='active'`, у которых есть `face_templates` с той же `model_version`, что у заявленного; `id = "person-<id>"`. Берутся из БД функцией `repositories/persons.py::gallery_for(db, exclude_person_id, model_version)`, в запрос (`request` для frames, JSON для camera) попадают только если список не пуст. Правило модуля: кадр похож на кого-то из `gallery` не меньше, чем на заявленный эталон → `face_mismatch`. Заявленный человек в `gallery` не входит. Модуль эмбеддинги из `gallery` не хранит; бэк их не сравнивает.
 - `FACE_CAMERA_ID` (по умолчанию `gate-1`) — id камеры для `verify_camera`, `settings.face_camera_id`.
-- Модуль возвращает **факты и `status`**, решение принимает бэк: проход `allow` только при верной подписи телефона **и** `status == "ok"`. Клиентские `match`/`verified` не принимаются.
+- Модуль возвращает **факты и `status`**, решение принимает бэк: проход `allow` только после верного кода с телефона **и** `status == "ok"`. Клиентские `match`/`verified` не принимаются.
 - Три кода `bad_image`, `unsupported_format`, `too_large` модуль отдаёт через HTTP 4xx с телом `{"reason": {"code", "text"}}` → `FaceRejected(reason)`: на регистрации — 422 `FACE_<CODE>` с `reason.text`, на проходе (Ф4) — `deny` с тем же кодом. Остальное — `internal_error` и прочие не-200, другие 4xx, мусорное тело, таймаут, обрыв, ответ не по контракту → `FaceUnavailable` → отказ `FACE_SERVICE_UNAVAILABLE` / «Сервис распознавания недоступен, попробуйте позже». **Никакой заглушки, возвращающей «ок».** В тестах подменяются `check_reference`/`verify_frames` (monkeypatch) или транспорт httpx (`MockTransport`).
 - Эмбеддинг бэк хранит как строку вместе с `model_version` и `reference_hash` и сам не сравнивает; порог сходства — в модуле.
 - **Коды отказа — единообразно `FACE_<REASON_CODE>`**, где `REASON_CODE` — `reason.code`/`status` модуля в верхнем регистре, а сообщение — `reason.text` модуля как есть:
   - эталон (`references/check`, 422): `FACE_NO_FACE`, `FACE_MULTIPLE_PEOPLE`, `FACE_MULTIPLE_FACES`, `FACE_TURN_TO_CAMERA`, `FACE_TOO_SMALL`, `FACE_LOW_QUALITY`, `FACE_BAD_IMAGE`, `FACE_UNSUPPORTED_FORMAT`, `FACE_TOO_LARGE` (последние три — через 4xx, см. выше);
   - проход (`verify`, `reason_code` отказа): `FACE_NO_FACE`, `FACE_FACE_COVERED` (лицо закрыто), `FACE_MULTIPLE_PEOPLE`, `FACE_MULTIPLE_FACES` (второе лицо, в том числе на фото или экране рядом), `FACE_TURN_TO_CAMERA`, `FACE_TOO_SMALL`, `FACE_LOW_QUALITY`, `FACE_FACE_MISMATCH`, `FACE_SPOOF_SUSPECTED`, `FACE_FRAME_IS_REFERENCE`, `FACE_FRAME_REPLAYED`, `FACE_NO_FRAMES`, `FACE_CAMERA_UNAVAILABLE`, `FACE_REFERENCE_OUTDATED`, а также `FACE_BAD_IMAGE`, `FACE_UNSUPPORTED_FORMAT`, `FACE_TOO_LARGE` (из `FaceRejected`);
   - свои коды бэка: `FACE_SERVICE_UNAVAILABLE` (сбой модуля, в том числе `internal_error`), `FACE_UNSUPPORTED_FORMAT` (фото не JPEG/PNG/WEBP по сигнатуре, до вызова модуля).
-- Режим камеры `verify_camera` — будущий (основной режим по api.md): окно `since` = `created_at` сессии, `until` = время подписи + 3 с. В Ф4 не реализуется.
+- Режим камеры `verify_camera` — будущий (основной режим по api.md): окно `since` = `created_at` сессии, `until` = время ввода кода + 3 с. В Ф4 не реализуется.
 
 ### 7.2 `llm` (реализует человек на модели)
 ```python
@@ -306,53 +317,73 @@ def require_role(*roles: str) -> Depends-callable   # 401 без токена, 4
 
 ### 8.4 Проход — сердце системы
 
-**`POST /passages {direction: "in"|"out"}`** — `controller`
-→ `{session_id, nonce, direction, expires_at, qr_payload}`
-- `nonce` = `secrets.token_urlsafe(32)`, TTL `PASS_SESSION_TTL_S`.
-- `qr_payload` = компактная JSON-строка `{"sid":..., "n":..., "d":...}`.
-- `controller_sub` берётся из токена.
+Сценарий: удостоверение -> контролёр выбирает человека -> сервер создаёт сессию с кодом -> телефон забирает код подписанным запросом -> рабочий называет код -> контролёр вводит -> лицо -> смена. Выход — тот же сценарий с `direction=out`. Подпись для `/face` не нужна: личность подтверждена кодом, который мог получить только активированный телефон этого человека. Пересылку кода в реальном времени закрывают не код, а удостоверение у контролёра и проверка лица по эталону (+ `gallery`); одноразовость, TTL и выдача только активированному телефону защищают от «использовать позже» и «скопировать».
 
-**`POST /passages/{id}/sign {device_id, signature}`** — без токена, авторизация подписью
-- Сообщение: `f"{session_id}|{nonce}|{direction}".encode()`. Подпись — base64url сырого `r||s` (64 байта, формат WebCrypto). Проверка — `verify_es256` (код ниже).
+**`GET /passages/people?q=&limit=20`** — `controller` (поиск после показа удостоверения)
+→ `[{id, fio, position, group: {id,name}|null, status, on_site, has_face, has_active_device}]`
+- `q` — подстрока ФИО без учёта регистра (ILIKE, `%` и `_` экранируются), пусто = все; `limit` 1..50 (иначе 422 `VALIDATION`); порядок по ФИО. Состояние считается тем же запросом, что `GET /persons`. Заблокированные в списке есть (выход им разрешён).
+
+**`POST /passages {person_id, direction: "in"|"out"}`** — `controller`
+→ как `GET /passages/{id}` (см. ниже); `controller_sub` берётся из токена.
+- Нет человека → 404 `PERSON_NOT_FOUND`.
+- Предпроверка правил (те же функции, что в `/face`), порядок:
+  - `status=blocked` и `in` → `PERSON_BLOCKED` «Доступ заблокирован администратором»;
+  - `in` при открытой смене → `ALREADY_ON_SITE` «Вы уже на объекте — сначала отметьте выход»;
+  - `out` без открытой смены → `NO_OPEN_SHIFT` «Нет открытой смены — вход не был отмечен»;
+  - нет эталона → `NO_FACE_TEMPLATE` «У человека нет эталонного фото, обратитесь к администратору»;
+  - нет активного (неотозванного) устройства → `NO_ACTIVE_DEVICE` «У человека нет активированного телефона, обратитесь к администратору».
+  Отказ = сессия сразу `decided`/`deny` + строка `access_events`, ответ 200; прежние живые сессии человека он не трогает.
+- Иначе (под `SELECT ... FOR UPDATE` по человеку): все прежние `pending`-сессии этого человека → `decided`/`deny`, `reason_code=SESSION_REPLACED`, `reason` «Проход начат заново», `code=NULL`, по событию на каждую. Новая сессия: `status=pending`, `person_id`, `code = f"{secrets.randbelow(10**6):06d}"`, TTL `PASS_SESSION_TTL_S`. Код в ответе не возвращается.
+
+**`POST /device/pass-code {device_id, ts, signature}`** — без токена, авторизация подписью телефона
+- Сообщение: `f"pass-code|{device_id}|{ts}".encode()` (`device_id` — как выдал `/enroll`, нижний регистр; `ts` — ISO 8601 с часовым поясом, строка ровно как отправлена). Подпись — base64url сырого `r||s`, проверка `verify_es256`.
 - Порядок проверок:
-  1. Сессия существует, иначе 404 `SESSION_NOT_FOUND`.
-  2. Устройство существует и не отозвано, иначе отказ `DEVICE_INVALID`.
-  3. Подпись верна, иначе отказ `DEVICE_INVALID` «Телефон не подтверждён, обратитесь к администратору». **Неверная подпись сессию не гасит** (чтобы чужой мусорный запрос не сорвал проход), но пишет событие `deny` в `access_events`.
-  4. Атомарный переход:
-     ```sql
-     UPDATE pass_sessions SET status='signed', device_id=:dev, person_id=:pid
-     WHERE id=:id AND status='pending' AND expires_at > now() RETURNING id
-     ```
-     Пусто → отказ `SESSION_EXPIRED` «QR устарел или уже использован, начните проход заново».
-- Ответ телефону: `{status: "signed", person: {fio}}`. Решения о проходе телефон **не получает**: решает шаг с лицом.
+  1. Устройство существует, не отозвано, подпись верна, иначе 403 `DEVICE_INVALID` «Телефон не подтверждён, обратитесь к администратору» (запись только в лог, без кода и без `access_events`: сессии нет).
+  2. `ts` разбирается, имеет часовой пояс и `|now − ts| ≤ PASS_CODE_REQUEST_MAX_SKEW_S`, иначе 409 `STALE_REQUEST` «Время на телефоне расходится с сервером, проверьте настройки времени» (только лог).
+  3. Защита от повтора: `UPDATE devices SET last_code_request_ts=:ts WHERE id=:id AND revoked_at IS NULL AND (last_code_request_ts IS NULL OR last_code_request_ts < :ts) RETURNING id`. Пусто и устройство не отозвано -> 409 `REPLAYED` «Запрос уже был принят, обновите экран» (только лог); отозвано в промежутке -> 403 `DEVICE_INVALID`. Обновление `ts` и выдача кода — в одной транзакции.
+  4. Код у истёкших `pending`-сессий этого человека обнуляется (`code=NULL`, статус не меняется). Берётся последняя `pending` и не истёкшая сессия `device.person_id` (чужие сессии недостижимы). Одним UPDATE: `device_id` = этот телефон, `code_delivered_at = coalesce(code_delivered_at, now())`.
+- Ответ: `{pending: true, session_id, direction, code, expires_at}` или `{pending: false}`. Телефон опрашивает роут раз в 2–3 с, пока открыт экран прохода. Это **единственное** место, где код уходит наружу.
+
+**`POST /passages/{id}/code {code}`** — `controller`
+→ как `GET /passages/{id}`
+- Сессии нет → 404 `SESSION_NOT_FOUND`. `controller_sub` не владельца → 403 `SESSION_FOREIGN` «Эта сессия прохода создана другим контролёром» + событие, сессия не меняется. Формат `^[0-9]{6}$`, иначе 422 `VALIDATION`.
+- Сначала `SELECT ... FROM pass_sessions WHERE id=:id FOR UPDATE`: вводы по одной сессии идут строго по очереди в одной транзакции (иначе параллельные неверные вводы обходят лимит попыток). Дальше сравнение кода и инкремент (сравнение в БД):
+  ```sql
+  UPDATE pass_sessions SET status='signed', code=NULL
+  WHERE id=:id AND status='pending' AND expires_at>now() AND code_delivered_at IS NOT NULL
+        AND code=:code AND code_attempts < :max RETURNING id, device_id
+  ```
+  Успех -> `status=signed`, ответ 200. Затем проверяется, что устройство сессии не отозвано, иначе сессия `decided`/`deny` `DEVICE_INVALID` «Телефон не подтверждён, обратитесь к администратору» + событие (200).
+- UPDATE пуст -> `UPDATE ... SET code_attempts=code_attempts+1 WHERE id=:id AND status='pending' AND expires_at>now() RETURNING code_attempts`:
+  - пусто (сессия не `pending` или истекла: повтор после успеха, после TTL, после гашения) -> 409 `SESSION_EXPIRED` «Сессия прохода устарела или уже использована, начните проход заново» + событие;
+  - `code_attempts >= PASS_CODE_MAX_ATTEMPTS` -> сессия `decided`/`deny` `CODE_ATTEMPTS_EXCEEDED` «Код введён неверно слишком много раз, начните проход заново», `code=NULL`, ответ 200; событие пишется, только если этот UPDATE реально перевёл сессию из `pending` (ровно одно на сессию);
+  - иначе 200 со `status=pending`, `decision=null`, `reason_code=CODE_INVALID`, `reason` «Код не совпадает. Осталось попыток: N», событие `deny`. Сессия остаётся `pending`; `reason_code/reason` — только в этом ответе.
+- Код, который телефон ещё не забрал (`code_delivered_at IS NULL`), не принимается и считается неверной попыткой. Два параллельных ввода верного кода дают ровно один `signed`, второй — `SESSION_EXPIRED`.
 
 **`GET /passages/{id}`** — `controller` (планшет опрашивает раз в ~1 с)
-→ `{session_id, status, direction, expires_at, person: {id, fio}|null, decision, reason_code, reason}`
+→ `{session_id, status, direction, expires_at, person: {id, fio}|null, decision, reason_code, reason, code_delivered}`
+- `code_delivered` — телефон уже забрал код (планшету подсказка «код на телефоне, попросите назвать»). Самого кода в ответе нет **никогда**.
 
 **`POST /passages/{id}/face`** (multipart, поле `frames` — 1–10 файлов, кадры по порядку съёмки) — `controller`
-1. Сессия в статусе `signed` и не истекла, иначе `SESSION_EXPIRED`. Отправитель — тот же `controller_sub`, что создал сессию, иначе 403.
-2. Правила по человеку и направлению:
-   - `status=blocked` и `direction=in` → отказ `PERSON_BLOCKED` «Доступ заблокирован администратором». Выход заблокированному разрешён.
-   - `in` при открытой смене → `ALREADY_ON_SITE` «Вы уже на объекте — сначала отметьте выход».
-   - `out` без открытой смены → `NO_OPEN_SHIFT` «Нет открытой смены — вход не был отмечен».
-   - Нет эталона → `NO_FACE_TEMPLATE` «У человека нет эталонного фото, обратитесь к администратору».
+1. Сессия в статусе `signed` и не истекла, иначе `SESSION_EXPIRED`. Отправитель — тот же `controller_sub`, что создал сессию, иначе 403 `SESSION_FOREIGN`.
+2. Правила по человеку и направлению перепроверяются (состояние могло измениться после создания): `PERSON_BLOCKED`, `ALREADY_ON_SITE`, `NO_OPEN_SHIFT`, `NO_FACE_TEMPLATE` (тексты выше). Затем устройство сессии (`device_id`) не должно быть отозвано, иначе `deny` `DEVICE_INVALID` (телефон могли отозвать между `/code` и `/face`); модуль в этом случае не вызывается.
 3. Лицо:
-   - `face.verify_frames(reference, attempt_id=session_id, frames, gallery=persons.gallery_for(db, person_id, template.model_version))`, где `reference` — эталон человека из `face_templates` (`embedding`, `model_version`, `reference_hash`), `gallery` — эталоны других активных людей (п. 7.1).
-   - `status != "ok"` → `deny`; причина для человека — `reason.text` модуля; в `access_events` пишутся `reason_code` = `FACE_` + `status.upper()` (например `FACE_FACE_MISMATCH`, `FACE_SPOOF_SUSPECTED`, `FACE_MULTIPLE_PEOPLE`, `FACE_MULTIPLE_FACES`, `FACE_FACE_COVERED`) и `reason` = `reason.text`.
-   - `FaceUnavailable` → `deny` `FACE_SERVICE_UNAVAILABLE` «Сервис распознавания недоступен, попробуйте позже», запись в `access_events` обязательна (не пропуск).
-   - `allow` только при `status == "ok"` (подпись телефона уже проверена на `/sign`). Собственных проверок лица (число лиц, «живость», медиана, порог) бэк не делает: это факты и решение модуля.
+   - `face.verify_frames(reference, attempt_id=session_id, frames, gallery=persons.gallery_for(db, person_id, template.model_version))`, где `reference` — эталон человека из `face_templates` (`embedding`, `model_version`, `reference_hash`), `gallery` — эталоны других активных людей (п. 7.1). Вызов модуля идёт без открытой транзакции.
+   - `status != "ok"` -> `deny`; причина для человека — `reason.text` модуля; в `access_events` пишутся `reason_code` = `FACE_` + `status.upper()` (например `FACE_FACE_MISMATCH`, `FACE_SPOOF_SUSPECTED`, `FACE_MULTIPLE_PEOPLE`, `FACE_MULTIPLE_FACES`, `FACE_FACE_COVERED`) и `reason` = `reason.text`.
+   - `FaceUnavailable` -> `deny` `FACE_SERVICE_UNAVAILABLE` «Сервис распознавания недоступен, попробуйте позже», запись в `access_events` обязательна (не пропуск).
+   - `allow` только при `status == "ok"` (код уже принят на `/code`). Собственных проверок лица (число лиц, «живость», медиана, порог) бэк не делает: это факты и решение модуля.
    - `face_score` = `facts.get("similarity")` или NULL, если факта нет.
-   - Режим `verify_camera` (видео с камеры, окно `since` = `created_at` сессии, `until` = время подписи + 3 с) — будущий, сейчас не реализуется.
+   - Режим `verify_camera` (видео с камеры, окно `since` = `created_at` сессии, `until` = время ввода кода + 3 с) — будущий, сейчас не реализуется.
 4. Решение и смена — в **одной транзакции**:
-   - Атомарно `UPDATE pass_sessions SET status='decided', decision=..., ... WHERE id=:id AND status='signed' RETURNING id`. Пусто → сессию уже решили, отказ `SESSION_EXPIRED`.
-   - `allow` + `in` → `INSERT shifts(started_at=now())`. Нарушение `one_open_shift` → `ALREADY_ON_SITE`.
-   - `allow` + `out` → закрыть открытую смену, посчитать `worked_minutes`.
+   - Атомарно `UPDATE pass_sessions SET status='decided', decision=..., ... WHERE id=:id AND status='signed' RETURNING id`. Пусто -> сессию уже решили, отказ `SESSION_EXPIRED`.
+   - `allow` + `in` -> `INSERT shifts(started_at=now())`. Нарушение `one_open_shift` -> `ALREADY_ON_SITE`.
+   - `allow` + `out` -> закрыть открытую смену, посчитать `worked_minutes`.
    - Запись в `access_events` при **любом** исходе.
 5. Ответ: HTTP 200 `{decision: "allow"|"deny", reason_code, reason, person: {id, fio}, shift: {id, started_at, ended_at, worked_minutes}|null}`.
    - Отказ по бизнес-правилу — это 200 с `decision=deny`.
    - 4xx/5xx — только для технических ошибок (нет сессии, нет прав, кривой запрос).
 
-**Каждая ветка отказа на любом шаге = строка в `access_events` с `reason_code` и `reason`.**
+**Каждая ветка отказа на любом шаге прохода (создание, `/code`, `/face`) = строка в `access_events` с `reason_code` и `reason`.** Исключение — отказы `POST /device/pass-code` (`DEVICE_INVALID`, `STALE_REQUEST`, `REPLAYED`): они приходят без сессии и пишутся только в лог. Код прохода не пишется ни в логи, ни в `access_events`, ни в ответы планшету.
 
 ```python
 # backend/app/core/crypto.py
@@ -463,28 +494,39 @@ def period_summary(s, date_from, date_to) -> dict    # люди, смены, ч�
 
 - Тестовая БД — отдельная база в том же Postgres; таблицы через миграции.
 - Модуль `face` подменяется monkeypatch (или `httpx.MockTransport`), `AUTH_DEV_BYPASS=true`; клиент `app/face` покрыт отдельными unit-тестами.
-- Ключи телефона генерируются в тесте (`cryptography`), подпись конвертируется в `r||s`.
+- Ключи телефона генерируются в тесте (`cryptography`), подпись конвертируется в `r||s`; запрос `pass-code` подписывает `Phone.pass_code_body()`.
 
 Обязательные сценарии-атаки:
 
 | # | Сценарий | Ожидание |
 |---|---|---|
-| 1 | Повторная отправка той же валидной подписи | второй раз `SESSION_EXPIRED` |
-| 2 | Подпись после истечения TTL | `SESSION_EXPIRED` |
-| 3 | Подпись с правильным `device_id`, но чужим ключом | `DEVICE_INVALID`, сессия остаётся `pending` |
-| 4 | Подпись другой сессии / другого направления | `DEVICE_INVALID` |
+| 1 | Повторный ввод того же верного кода после успеха | второй раз `SESSION_EXPIRED` |
+| 2 | Код после истечения TTL | `SESSION_EXPIRED` |
+| 3 | Неверный код | `CODE_INVALID`, сессия остаётся `pending`, есть событие |
+| 4 | Перебор: 5 неверных кодов подряд; затем верный код | `CODE_ATTEMPTS_EXCEEDED`, затем `SESSION_EXPIRED` |
+| 4а | Код другой сессии (другого человека) | `CODE_INVALID` |
+| 4б | Телефон человека B опрашивает `pass-code` во время сессии A | `{pending: false}`, код A не выдан |
+| 4в | Код ещё не забран телефоном — контролёр вводит верный код | не принимается (`CODE_INVALID`), после выдачи — принимается |
+| 4г | Отозванное устройство и чужая подпись на `pass-code` | `DEVICE_INVALID`, код не выдан |
+| 4д | `pass-code` со старым `ts` (или из будущего) | 409 `STALE_REQUEST` |
+| 4д2 | Повтор того же `pass-code` запроса (тот же или более ранний `ts`) | 409 `REPLAYED`, код не выдан |
+| 4з | 20 неверных + 1 верный ввод параллельно (Barrier) | `code_attempts ≤ PASS_CODE_MAX_ATTEMPTS`, ровно одно событие `CODE_ATTEMPTS_EXCEEDED`; верный после лимита не принят |
+| 4и | Телефон отозван между `/code` и `/face` | `/face`: `deny` `DEVICE_INVALID`, модуль не вызван |
+| 4к | Код истёкшей `pending`-сессии | при `pass-code`/создании сессии человека `code=NULL`, статус `pending` |
+| 4е | Новая сессия того же человека | прежняя `SESSION_REPLACED`, её код недействителен |
+| 4ж | `GET /passages/{id}` и логи, в том числе трассировка ошибки БД | кода нет ни в ответе, ни в логе (`create_engine(..., hide_parameters=True)`) |
 | 5 | Устройство A + лицо человека B: модуль вернул `face_mismatch` | `FACE_FACE_MISMATCH`, `deny` |
 | 6 | Модуль вернул `spoof_suspected` (фото/экран/повтор кадра) | `FACE_SPOOF_SUSPECTED`, `deny` |
 | 7 | Модуль вернул `multiple_people` (двое в кадре) | `FACE_MULTIPLE_PEOPLE`, `deny` |
 | 8 | `check_reference` вернул `accepted=false` (`multiple_people`, `no_face`) | 422 `FACE_MULTIPLE_PEOPLE` / `FACE_NO_FACE`, запись **не создана** |
 | 9 | Повторная активация по той же ссылке | `ENROLL_CODE_INVALID` |
-| 10 | Новая активация отзывает старое устройство | старое → `DEVICE_INVALID` |
+| 10 | Новая активация отзывает старое устройство | старое → `DEVICE_INVALID` на `pass-code`; устройство, отозванное после выдачи кода → `DEVICE_INVALID` на `/code` |
 | 11 | Двойной вход; выход без входа | `ALREADY_ON_SITE`; `NO_OPEN_SHIFT` |
-| 12 | `/face` до `/sign` | `SESSION_EXPIRED` |
-| 13 | Две параллельные отправки `/face` | ровно одно решение, одна смена |
+| 12 | `/face` до ввода кода | `SESSION_EXPIRED` |
+| 13 | Две параллельные отправки `/face`; две параллельные `/code` с верным кодом | ровно одно решение и одна смена; ровно один `signed` |
 | 14 | Геоточки без открытой смены и после закрытия | 409 `NO_OPEN_SHIFT` |
 | 15 | Повтор пачки геоточек | 409 `REPLAYED` |
-| 16 | Каждый отказ выше | есть строка в `access_events` с `reason_code` |
+| 16 | Каждый отказ выше, кроме отказов `/device/pass-code` (`DEVICE_INVALID`, `STALE_REQUEST`, `REPLAYED`): они без сессии и пишутся только в лог | есть строка в `access_events` с `reason_code` |
 | 16а | `allow` только при `status == "ok"`: `status=spoof_suspected` при `facts.match=true` → `deny`; `reference_outdated` → `deny` (Ф4) | `FACE_SPOOF_SUSPECTED` / `FACE_REFERENCE_OUTDATED`, `deny` |
 | 16б | `gallery` передаётся в `verify_frames` и не содержит заявленного человека (только другие активные с той же `model_version`); `multiple_faces` / `face_covered` → `deny` `FACE_MULTIPLE_FACES` / `FACE_FACE_COVERED` (Ф4) | в запросе `gallery` без `person-<id>` заявленного; отказ с `reason.text` модуля |
 | 17 | Сбой модуля: `FaceUnavailable` (не-200, таймаут, обрыв, мусорный ответ) | `FACE_SERVICE_UNAVAILABLE`, `deny`, сервер жив |
@@ -504,7 +546,7 @@ def period_summary(s, date_from, date_to) -> dict    # люди, смены, ч�
 | **Ф1** | 0:30–1:15 | **Все** роуты раздела 8 с pydantic-схемами запросов и ответов. Тела-заглушки возвращают пример по схеме, каждая помечена `# STUB`. Временный `auth.py`, интерфейсы `face` и `llm` | `/docs` показывает все роуты с полными схемами. **Сразу сообщить команде — фронты ждут** |
 | **Ф2** | 1:15–2:15 | Модели по разделу 6, первая миграция, автоприменение при старте | Таблицы создаются на чистой БД; после рестарта данные на месте |
 | **Ф3** | 2:15–3:00 | 8.1–8.3: группы, люди с проверкой фото, коды активации, `/enroll`, аудит | Тесты 8, 9, 10 |
-| **Ф4** | 3:00–4:30 | 8.4: проход целиком, `crypto.py`, смены, `access_events` | Тесты 1–7, 11–13, 16, 17 |
+| **Ф4** | 3:00–4:30 | 8.4: проход целиком, `crypto.py`, смены, `access_events`. **Переделан:** подтверждение прохода — 6-значный код вместо QR-подписи (миграции 0003, 0004) | Тесты 1–7, 11–13, 16, 17 (в новой формулировке §9) |
 | **Ф5** | 4:30–5:30 | 8.5–8.7: геоточки, `/site/now`, журнал, план, калибровка, зоны, пересчёт | Тесты 14, 15 |
 | **Ф6** | 5:30–6:30 | 8.8–8.9: `queries.py`, тепловая карта, маршруты, отчёты | Тесты 18, 19 |
 | **Ф7** | 6:30–7:00 | 8.10: роуты помощника через `llm` | При неготовом `llm` — `status=unavailable`, без падений |

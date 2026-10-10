@@ -1,28 +1,34 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, File, UploadFile
+from fastapi import APIRouter, File, Query, UploadFile
 
 from app.api.persons import MAX_PHOTO_BYTES
 from app.dependency import ControllerDep, DbDep
 from app.schemas.passages import (
-    FaceResultOut, PassageCreate, PassageCreated, PassageStatusOut, SignIn, SignOut,
+    CodeIn, FaceResultOut, PassageCreate, PassagePersonOut, PassageStatusOut,
 )
 from app.services import passage as service
 
 router = APIRouter(tags=["passages"])
 
 
-@router.post("/passages", response_model=PassageCreated)
+@router.get("/passages/people", response_model=list[PassagePersonOut])
+def find_people(db: DbDep, user: ControllerDep, q: Annotated[str | None, Query(max_length=100)] = None, limit: Annotated[int, Query(ge=1, le=50)] = 20):
+    """Поиск человека по ФИО (после показа удостоверения). Объявлен до /passages/{session_id}."""
+    return service.search_people(db, q, limit)
+
+
+@router.post("/passages", response_model=PassageStatusOut)
 def create_passage(body: PassageCreate, db: DbDep, user: ControllerDep):
-    """Контролёр начинает проход: сессия с одноразовым nonce и QR."""
-    return service.create(db, user["sub"], body.direction)
+    """Контролёр выбрал человека: сессия с одноразовым кодом (код видит только телефон рабочего)."""
+    return service.create(db, user["sub"], body.person_id, body.direction)
 
 
-@router.post("/passages/{session_id}/sign", response_model=SignOut)
-def sign_passage(session_id: UUID, body: SignIn, db: DbDep):
-    """Без токена: телефон подписывает session_id|nonce|direction ключом устройства."""
-    return service.sign(db, session_id, body)
+@router.post("/passages/{session_id}/code", response_model=PassageStatusOut)
+def enter_code(session_id: UUID, body: CodeIn, db: DbDep, user: ControllerDep):
+    """Контролёр вводит 6-значный код, который назвал рабочий."""
+    return service.submit_code(db, session_id, user["sub"], body.code)
 
 
 @router.get("/passages/{session_id}", response_model=PassageStatusOut)

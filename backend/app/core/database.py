@@ -8,7 +8,7 @@ from app.core.config import settings
 
 if not settings.database_url:
     raise RuntimeError("DATABASE_URL не задан: см. .env.example")
-engine = create_engine(settings.database_url, pool_pre_ping=True)
+engine = create_engine(settings.database_url, pool_pre_ping=True, hide_parameters=True)  # параметры (код прохода) не попадают в текст ошибок
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 
 

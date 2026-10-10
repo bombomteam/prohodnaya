@@ -64,6 +64,7 @@ def list_with_state(
     status: str | None = None,
     on_site: bool | None = None,
     person_id: int | None = None,
+    limit: int | None = None,
 ) -> list[Row]:
     """Люди с состоянием из реальных таблиц.
 
@@ -106,4 +107,6 @@ def list_with_state(
         stmt = stmt.where(Person.status == status)
     if on_site is not None:
         stmt = stmt.where(Shift.id.is_not(None) if on_site else Shift.id.is_(None))
+    if limit is not None:
+        stmt = stmt.limit(limit)
     return list(db.execute(stmt))

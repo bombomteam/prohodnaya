@@ -25,5 +25,6 @@ class Device(Base):
     person_id: Mapped[int] = mapped_column(ForeignKey("persons.id"))
     public_key_jwk: Mapped[dict] = mapped_column(JSONB)
     last_location_ts: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))  # защита от повтора пачек геоточек
+    last_code_request_ts: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))  # защита от повтора запросов /device/pass-code
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
