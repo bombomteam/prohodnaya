@@ -75,17 +75,23 @@ export const demoApi = {
     return { employee: clone(employee), photoCheck: { status: "demo", message: "Демо: сотрудник добавлен. Фото не проверено и не сохранено; для этого нужен сервер." } };
   },
   async attempts() { return clone(read().attempts); },
-  async createChallenge(direction) {
+  async gatePeople() { return clone(read().employees); },
+  async createChallenge(direction, employeeId) {
     const state = read();
+    const employee = person(state, employeeId);
+    if (!employee) fail("Выберите сотрудника по пропуску.");
+    if (!employee.enrolled) fail("Телефон не подтверждён, обратитесь к администратору.");
+    if (employee.blocked) fail("Сотрудник заблокирован.");
+    for (const previous of state.challenges.filter(x => x.employeeId === employeeId && ["waiting", "confirmed"].includes(x.status))) previous.status = "used";
     const challenge = { id: id(), code: String(Math.floor(100000 + Math.random() * 900000)), direction,
+      employeeId, personName: employee.name, phoneConfirmed: false,
       expiresAt: new Date(Date.now() + 2 * 60000).toISOString(), status: "waiting" };
-    state.challenges.push(challenge); write(state); return clone(challenge);
+    state.challenges.push(challenge); write(state); return { ...clone(challenge), code: undefined };
   },
   async challenge(challengeId) {
     const challenge = read().challenges.find(x => x.id === challengeId);
     if (!challenge) fail("Запрос прохода не найден.");
-    if (new Date(challenge.expiresAt) < new Date() && challenge.status === "waiting") return { ...challenge, status: "expired" };
-    return clone(challenge);
+    return { ...clone(challenge), code: undefined, status: new Date(challenge.expiresAt) <= new Date() ? "expired" : challenge.status };
   },
   async decidePass(challengeId, direction, image) {
     const state = read();
@@ -119,18 +125,28 @@ export const demoApi = {
     if (!employee) fail("Сотрудник не найден.");
     employee.enrolled = true; write(state); return { employee: clone(employee) };
   },
-  async passOptions(code) {
-    const challenge = read().challenges.find(x => x.code === code && x.status === "waiting");
-    if (!challenge || new Date(challenge.expiresAt) < new Date()) fail("Код не найден или время ожидания истекло.");
-    return { challengeId: challenge.id, direction: challenge.direction, demo: true };
-  },
   async confirmPass(challengeId, assertion) {
     const state = read(); const challenge = state.challenges.find(x => x.id === challengeId);
     if (!challenge || challenge.status !== "waiting") fail("Запрос прохода недоступен.");
     const employee = person(state, assertion.demoEmployeeId);
     if (!employee?.enrolled) fail("Телефон сотрудника ещё не привязан.");
-    challenge.employeeId = employee.id; challenge.status = "confirmed";
-    write(state); return { status: "confirmed", employeeName: employee.name };
+    if (challenge.employeeId !== employee.id) fail("Эта попытка принадлежит другому работнику.");
+    if (new Date(challenge.expiresAt) <= new Date()) fail("Время подтверждения истекло.");
+    challenge.phoneConfirmed = true;
+    write(state); return { status: "waiting", employeeName: employee.name, code: challenge.code };
+  },
+  async workerPassage(employeeId) {
+    const challenge = read().challenges.findLast(x => x.employeeId === employeeId && x.status === "waiting" && new Date(x.expiresAt) > new Date());
+    return challenge ? { ...clone(challenge), code: challenge.phoneConfirmed ? challenge.code : null } : null;
+  },
+  async verifyCode(challengeId, code) {
+    const state = read(); const challenge = state.challenges.find(x => x.id === challengeId);
+    if (!challenge || challenge.status !== "waiting") fail("Запрос прохода недоступен.");
+    if (new Date(challenge.expiresAt) <= new Date()) fail("Время подтверждения истекло.");
+    if (!challenge.phoneConfirmed) fail("Рабочий ещё не подтвердил запрос на телефоне.");
+    if (!/^\d{6}$/.test(code) || code !== challenge.code) fail("Неверный код подтверждения.");
+    challenge.status = "confirmed"; write(state);
+    return { ...clone(challenge), code: undefined };
   },
   async sendLocation(shiftId, position) {
     const state = read(); const shift = state.shifts.find(x => x.id === shiftId && !x.endedAt);

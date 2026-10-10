@@ -182,6 +182,26 @@ test("backend field names map to displayed status and journal", () => {
   assert.deepEqual(mapEvent({ id: 4, ts: "2026-10-10T00:00:00Z", direction: "out", result: "deny", reason: "Отказ" }).outcome, "denied");
 });
 
+test("face refusal objects display human text in decision and journal", async () => {
+  const previous = { fetch: globalThis.fetch, location: globalThis.location, session: { ...session } };
+  globalThis.location = new URL("http://localhost:8080/?devRole=controller");
+  session.dev = true;
+  try {
+    for (const [code, text] of [["FACE_OCCLUDED", "Лицо закрыто"], ["FACE_MULTIPLE_FACES", "В кадре несколько лиц. Проходите по одному"]]) {
+      const value = { decision: "deny", result: "deny", reason: { code, text } };
+      globalThis.fetch = async () => Response.json(value);
+      const result = await backendApi.decidePass("id", "entry", [new Blob(["jpg"])]);
+      assert.equal(result.reason, text);
+      assert.equal(result.reasonCode, code);
+      assert.equal(mapEvent(value).reason, text);
+    }
+  } finally {
+    globalThis.fetch = previous.fetch;
+    globalThis.location = previous.location;
+    Object.assign(session, previous.session);
+  }
+});
+
 test("sightings list uses route timestamps, worker names and configured zone names", () => {
   const routes = [
     { employeeId: "1", employeeName: "Иванов Иван", points: [{ at: "2026-10-10T07:00:00Z", zoneId: 2 }] },

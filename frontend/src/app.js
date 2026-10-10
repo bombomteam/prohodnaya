@@ -13,8 +13,8 @@ let polling = false;
 const nowDate = () => new Intl.DateTimeFormat("sv-SE", { timeZone: config.timeZone || "Europe/Moscow", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
 const state = {
   page: "overview", employees: [], groups: [], attempts: [], dashboard: null, analytics: null, shiftReport: null, personReport: null, site: null, selectedRouteId: null,
-  worker: null, workerId: "", direction: "entry", challenge: null, passResult: null,
-  cameraStream: null, faceBlob: null, faceFrames: [], faceUrl: null, captureCount: 3, employeeError: null, locationWatch: null, locationLastSent: 0,
+  worker: null, workerId: "", workerPassage: null, gateEmployeeId: "", direction: "entry", challenge: null, passResult: null,
+  cameraStream: null, faceBlob: null, faceFrames: [], faceUrl: null, employeeError: null, locationWatch: null, locationLastSent: 0,
   locationStatus: "Геолокация выключена", assistant: null, busy: false, toast: null, loadError: null, mobileMenu: false,
   filters: { from: nowDate(), to: nowDate(), hourFrom: "0", hourTo: "23", employeeIds: "" },
 };
@@ -63,6 +63,7 @@ async function refresh(page = state.page) {
       [state.employees, state.groups] = config.mode === "demo" ? [await api.employees(), []] : await Promise.all([api.employees(), api.groups()]);
     }
     if (page === "worker" && config.mode === "demo") state.employees = await api.employees();
+    if (page === "gate" && config.mode === "demo") state.employees = await api.gatePeople();
     if (page === "journal") state.attempts = await api.attempts();
     if (page === "analytics") {
       const availablePeople = config.mode === "demo" ? await api.employees() : await api.reportPeople();
@@ -76,6 +77,7 @@ async function refresh(page = state.page) {
       state.worker = await api.me();
       if (!state.workerId && config.mode === "demo") state.workerId = state.worker.demoEmployees?.[0]?.id || "";
       if (config.mode === "api") state.workerId = state.worker.employee?.id || "";
+      if (config.mode === "demo") state.workerPassage = await api.workerPassage(state.workerId);
     }
     state.loadError = null;
   } catch (error) { state.loadError = errorMessage(error); }
@@ -88,7 +90,7 @@ function shell(content) {
   return `<div class="app-shell">
     <aside class="sidebar">
       <div class="brand"><div class="brand-mark">П</div><div><strong>ПРОХОДНАЯ</strong><small>Контроль объекта</small></div></div>
-      <div class="side-label">РАБОЧЕЕ ПРОСТРАНСТВО</div>
+      <a class="text-button" href="?worker=1" target="_blank" rel="noopener noreferrer">Открыть телефон рабочего ↗</a><div class="side-label">РАБОЧЕЕ ПРОСТРАНСТВО</div>
       <nav class="side-nav">${visibleNav.map(([id, icon, label]) => `<button class="nav-link ${state.page === id ? "active" : ""}" data-page="${id}"><span class="nav-icon">${icon}</span>${label}</button>`).join("")}</nav>
       <div class="sidebar-foot"><div class="connection-dot"></div><div><b>${config.mode === "demo" ? "Деморежим" : "Подключение к API"}</b><small>${config.mode === "demo" ? "Данные только для разработки" : esc(config.apiBaseUrl)}</small></div></div>
     </aside>
@@ -131,14 +133,42 @@ function employees() {
     <dialog id="employee-dialog" class="modal"><form id="employee-form" class="modal-form"><div class="modal-heading"><div><div class="eyebrow">АДМИНИСТРИРОВАНИЕ</div><h2 id="employee-dialog-title">Новый сотрудник</h2></div><button type="button" class="icon-button" data-action="close-dialog" aria-label="Закрыть">×</button></div><input type="hidden" name="employeeId"><label>ФИО <input name="name" required placeholder="Иванов Иван Иванович"></label><div class="form-grid">${config.mode === "api" ? `<label>Группа <select name="groupId"><option value="">Без группы</option>${state.groups.map(group => `<option value="${esc(group.id)}">${esc(group.name)}</option>`).join("")}</select></label>` : '<label>Организация <input name="company" placeholder="Название подрядчика"></label>'}<label>Должность <input name="role" placeholder="Специальность"></label></div><label class="upload-box"><span class="upload-icon">▧</span><b>Эталонное фото</b><small>Один человек в кадре, лицо видно чётко.</small><input name="referencePhoto" type="file" accept="image/jpeg,image/png,image/webp" id="photo-input"><span id="file-name" class="file-name">Выбрать файл</span></label>${state.employeeError ? `<div class="error-banner" role="alert">${esc(state.employeeError)}</div>` : ""}<div class="modal-actions"><button type="button" class="button button-outline" data-action="close-dialog">Отмена</button><button class="button button-primary" type="submit" ${state.busy ? "disabled" : ""}>Сохранить</button></div></form></dialog>`;
 }
 
+function targetedGate() {
+  const c = state.challenge, result = state.passResult;
+  const expired = c && Date.parse(c.expiresAt) <= Date.now();
+  const confirmed = c?.status === "confirmed" && !expired;
+  return `<div class="gate-layout"><div class="gate-main">
+    <section class="panel"><div class="step-heading"><span class="step-number">01</span><div><h2>Сотрудник и операция</h2><p>Найдите сотрудника по ФИО или номеру пропуска</p></div></div>
+    <label>Поиск по пропуску<input id="gate-person-search" type="search" placeholder="ФИО или ID" autocomplete="off"></label>
+    <label>Сотрудник<select id="gate-person-select"><option value="">Выберите сотрудника</option>${state.employees.map(x => `<option value="${esc(x.id)}" ${x.id === state.gateEmployeeId ? "selected" : ""}>${esc(x.name)} · ID ${esc(x.id)}${!x.enrolled ? " · телефон не привязан" : ""}</option>`).join("")}</select></label>
+    <div class="segment"><button class="${state.direction === "entry" ? "selected" : ""}" data-action="direction" data-value="entry">↗ Вход на объект</button><button class="${state.direction === "exit" ? "selected" : ""}" data-action="direction" data-value="exit">↙ Выход с объекта</button></div>
+    <button class="button button-primary wide" data-action="create-challenge" ${state.busy || !state.gateEmployeeId ? "disabled" : ""}>Отправить запрос работнику</button></section>
+    <section class="panel"><div class="step-heading"><span class="step-number">02</span><div><h2>Код с телефона рабочего</h2><p>Рабочий подтверждает запрос в своём профиле и сообщает вам шесть цифр</p></div></div>
+    ${c ? `<div class="challenge-box"><div><b>${esc(c.personName)}</b><span>${dirName(c.direction)} · до ${time(c.expiresAt)}</span></div><span class="badge ${confirmed ? "badge-green" : expired ? "badge-red" : "badge-amber"}">${confirmed ? "Код подтверждён" : expired ? "Срок истёк" : "Ожидание кода"}</span></div>
+    ${!confirmed && !expired ? `<form id="gate-code-form"><label>Код рабочего<input name="code" inputmode="numeric" autocomplete="off" pattern="[0-9]{6}" minlength="6" maxlength="6" placeholder="000000" required></label><button class="button button-primary wide" ${state.busy ? "disabled" : ""}>Проверить код</button></form>` : ""}` : '<div class="empty compact">Выберите сотрудника и отправьте запрос.</div>'}</section>
+    <section class="panel"><div class="step-heading"><span class="step-number">03</span><div><h2>Проверка личности по лицу</h2><p>После проверки кода снимите лицо выбранного сотрудника</p></div></div>
+    <div class="camera-box">${state.faceUrl ? `<img src="${state.faceUrl}" alt="Кадр для сравнения с эталоном">` : '<video id="camera-video" autoplay playsinline muted></video><div class="camera-placeholder" id="camera-placeholder">Камера ещё не запущена</div>'}</div>
+    <p class="capture-settings">Задняя камера · 3 кадра · интервал 250 мс · JPEG 0.88</p><div class="camera-actions"><button class="button button-outline" data-action="start-camera" ${!confirmed || state.busy ? "disabled" : ""}>Включить камеру</button><button class="button button-outline" data-action="capture" ${state.cameraStream && confirmed && !state.busy ? "" : "disabled"}>Снять серию</button></div></section>
+    <button class="button button-primary wide decision-button" data-action="decide-pass" ${confirmed && state.faceBlob && !state.busy ? "" : "disabled"}>Проверить лицо и получить решение</button>
+    ${result ? `<div class="result-card ${result.outcome}" role="status"><strong>${result.outcome === "allowed" ? "Проход разрешён" : "Отказ в проходе"}</strong><span>${esc(result.employeeName)} · ${dirName(result.direction)}</span><p>${esc(result.reason)}</p></div>` : ""}</div>
+    <aside class="gate-aside"><div class="info-card"><h3>Порядок прохода</h3><ol><li>Выберите человека по пропуску</li><li>Отправьте запрос на его телефон</li><li>Введите код, который назовёт рабочий</li><li>Снимите лицо и дождитесь решения</li></ol><a href="?worker=1" target="_blank" rel="noopener noreferrer">Открыть профиль рабочего ↗</a></div><div class="note-card"><h3>Живой просмотр камеры</h3><a class="button button-outline wide" href="https://console.195-209-220-254.sslip.io/console/" target="_blank" rel="noopener noreferrer">Открыть камеру ↗</a></div><div class="note-card"><b>Демонстрация</b><p>Код и решение имитируются. Подпись телефона, сравнение лица, журнал и открытие смены в рабочем режиме проверяет сервер.</p></div></aside></div>`;
+}
+
+function workerConfirmation() {
+  const p = state.workerPassage;
+  if (!p || Date.parse(p.expiresAt) <= Date.now()) return '<div class="phone-section"><h3>Код для прохода</h3><p>Новых запросов нет. Контролёр выберет вас по пропуску и отправит запрос на этот телефон.</p><button class="button button-outline wide" data-action="refresh">Проверить запросы</button></div>';
+  return `<div class="phone-section"><h3>${dirName(p.direction)} на проходной</h3><p>${esc(p.personName)} · запрос действует до ${time(p.expiresAt)}</p>${p.code ? `<div class="worker-pass-code" role="status" aria-label="Код подтверждения">${esc(p.code)}</div><p>Назовите эти шесть цифр контролёру. После ввода кода нужно пройти проверку лица. Смена откроется только после разрешения системы.</p>` : '<p>Подтвердите, что вы сейчас на проходной, чтобы получить код.</p><button class="button button-primary wide" data-action="worker-get-code">Я на проходной — получить код</button>'}</div>`;
+}
+
 function gate() {
+  if (config.mode === "demo") return targetedGate();
   const c = state.challenge; const result = state.passResult;
   const apiMode = config.mode === "api";
   return `<div class="gate-layout"><div class="gate-main"><section class="panel"><div class="step-heading"><span class="step-number">01</span><div><h2>Выберите операцию</h2><p>Начните новый запрос на проход</p></div></div><div class="segment"><button class="${state.direction === "entry" ? "selected" : ""}" data-action="direction" data-value="entry">↗ Вход на объект</button><button class="${state.direction === "exit" ? "selected" : ""}" data-action="direction" data-value="exit">↙ Выход с объекта</button></div><button class="button button-primary wide" data-action="create-challenge" ${state.busy ? "disabled" : ""}>Создать запрос</button></section>
     <section class="panel"><div class="step-heading"><span class="step-number">02</span><div><h2>Подтверждение с телефона</h2><p>${apiMode ? "Передайте рабочему QR-данные для подписи на телефоне" : "Рабочий вводит одноразовый код на своём устройстве"}</p></div></div>${c ? `<div class="challenge-box"><div><small>${apiMode ? "QR-ДАННЫЕ" : "КОД ЗАПРОСА"}</small><strong style="overflow-wrap:anywhere;font-size:${apiMode ? "0.9rem" : "inherit"}">${esc(c.code)}</strong><span>Действует до ${time(c.expiresAt)}</span></div><span class="badge ${c.status === "confirmed" ? "badge-green" : c.status === "expired" ? "badge-red" : "badge-amber"}">${c.status === "confirmed" ? "Подтверждено" : c.status === "expired" ? "Истёк" : "Ожидание телефона"}</span></div>` : '<div class="empty compact">Сначала создайте запрос.</div>'}</section>
-    <section class="panel"><div class="step-heading"><span class="step-number">03</span><div><h2>${apiMode ? "Кадры лица" : "Снимок лица"}</h2><p>Лицо сравнивает сервер с эталонным фото</p></div></div><div class="camera-box">${state.faceUrl ? `<img src="${state.faceUrl}" alt="Снимок для проверки лица">` : '<video id="camera-video" autoplay playsinline muted></video><div class="camera-placeholder" id="camera-placeholder">Камера ещё не запущена</div>'}</div>${apiMode ? `<label class="capture-settings">Кадров в серии<select id="capture-count" ${state.busy ? "disabled" : ""}>${Array.from({ length: 10 }, (_, index) => index + 1).map(count => `<option value="${count}" ${count === state.captureCount ? "selected" : ""}>${count}</option>`).join("")}</select><small>Подготовлено кадров: ${state.faceFrames.length}</small></label>` : ""}<div class="camera-actions"><button class="button button-outline" data-action="start-camera" ${state.busy ? "disabled" : ""}>${state.cameraStream ? "↻ Переснять" : "◉ Включить камеру"}</button><button class="button button-outline" data-action="capture" ${state.cameraStream && !state.busy ? "" : "disabled"}>${apiMode ? "Снять серию" : "Сделать снимок"}</button></div></section>
+    <section class="panel"><div class="step-heading"><span class="step-number">03</span><div><h2>${apiMode ? "Кадры лица" : "Снимок лица"}</h2><p>Лицо сравнивает сервер с эталонным фото</p></div></div><div class="camera-box">${state.faceUrl ? `<img src="${state.faceUrl}" alt="Снимок для проверки лица">` : '<video id="camera-video" autoplay playsinline muted></video><div class="camera-placeholder" id="camera-placeholder">Камера ещё не запущена</div>'}</div><p class="capture-settings">Запасной режим: задняя камера, 3 кадра с интервалом 250 мс. Подготовлено кадров: ${state.faceFrames.length || (state.faceBlob ? 3 : 0)}</p><div class="camera-actions"><button class="button button-outline" data-action="start-camera" ${state.busy ? "disabled" : ""}>${state.cameraStream ? "↻ Переснять" : "◉ Включить камеру"}</button><button class="button button-outline" data-action="capture" ${state.cameraStream && !state.busy ? "" : "disabled"}>${apiMode ? "Снять серию" : "Сделать снимок"}</button></div></section>
     <button class="button button-primary wide decision-button" data-action="decide-pass" ${c?.status === "confirmed" && (apiMode ? (state.faceFrames.length >= 1 && state.faceFrames.length <= 10) : state.faceBlob) && !state.busy ? "" : "disabled"}>Отправить на проверку сервера →</button>${result ? `<div class="result-card ${result.outcome}"><strong>${result.outcome === "allowed" ? "Проход разрешён" : result.outcome === "error" ? "Ошибка проверки" : result.outcome === "pending" ? "Проверка выполняется" : "Отказ в проходе"}</strong><span>${esc(result.employeeName)} · ${dirName(result.direction)}</span><p>${esc(result.reason)}</p></div>` : ""}</div>
-    <aside class="gate-aside"><div class="info-card"><span class="info-symbol">⌁</span><h3>Порядок прохода</h3><ol><li>Создайте запрос на вход или выход</li><li>Попросите рабочего подтвердить код на телефоне</li><li>Сделайте снимок лица перед камерой</li><li>Дождитесь решения сервера</li></ol></div><div class="note-card"><b>Ответ принимает сервер</b><p>Фронт не вычисляет совпадение лиц и не открывает смену самостоятельно.</p></div></aside></div>`;
+    <aside class="gate-aside"><div class="note-card"><h3>Живой просмотр камеры</h3><p>Откроется в отдельной вкладке. Доступ предоставит ответственный за камеру.</p><a class="button button-outline wide" href="https://console.195-209-220-254.sslip.io/console/" target="_blank" rel="noopener noreferrer">Открыть камеру ↗</a></div><div class="info-card"><span class="info-symbol">⌁</span><h3>Порядок прохода</h3><ol><li>Создайте запрос на вход или выход</li><li>Попросите рабочего подтвердить код на телефоне</li><li>Сделайте снимок лица перед камерой</li><li>Дождитесь решения сервера</li></ol></div><div class="note-card"><b>Ответ принимает сервер</b><p>Фронт не вычисляет совпадение лиц и не открывает смену самостоятельно.</p></div></aside></div>`;
 }
 
 function worker() {
@@ -146,7 +176,7 @@ function worker() {
   const apiMode = config.mode === "api";
   return `<div class="phone-page"><div class="phone-frame"><div class="phone-top"><span>●●●</span><span>ПРОХОДНАЯ</span><span>◕</span></div><div class="phone-content"><div class="phone-welcome">МОЯ СМЕНА<h2>Здравствуйте${selected ? `, ${esc(selected.name.split(" ")[0])}` : ""}</h2><p>${esc(selected?.company || "Ваш пропуск на объект")}</p></div>${config.mode === "demo" ? `<label class="demo-worker-select">Сотрудник для демонстрации<select id="worker-select">${state.employees.map(x => `<option value="${esc(x.id)}" ${x.id === state.workerId ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select></label>` : ""}
     <div class="shift-card"><div class="shift-card-top"><span>СТАТУС СМЕНЫ</span>${apiMode ? "— НЕТ ДАННЫХ" : selected?.status === "inside" ? "● НА ОБЪЕКТЕ" : "○ ВНЕ ОБЪЕКТА"}</div><strong>${apiMode ? "Статус недоступен" : selected?.status === "inside" ? "Смена открыта" : "Смена закрыта"}</strong><p>${apiMode ? "В API пока нет маршрута статуса смены рабочего." : selected?.status === "inside" ? `Вход в ${time(selected.enteredAt)} · ${duration(selected.enteredAt)} на объекте` : "Подтвердите вход на проходной, чтобы начать смену"}</p></div>
-    <div class="phone-section"><h3>Подтвердить проход</h3><p>${apiMode ? "Вставьте QR-данные с экрана проходной и подпишите запрос устройством." : "Контролёр покажет одноразовый код запроса. Введите его здесь и подтвердите устройством."}</p><form id="confirm-form"><input name="code" ${apiMode ? 'placeholder="QR-данные {&quot;sid&quot;:...}"' : 'inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="6-значный код"'} required><button class="button button-primary wide" ${state.busy || (apiMode && !selected?.enrolled) ? "disabled" : ""}>Подтвердить личность</button></form></div>
+    ${!apiMode ? workerConfirmation() : `<div class="phone-section"><h3>Подтвердить проход</h3><p>${apiMode ? "Вставьте QR-данные с экрана проходной и подпишите запрос устройством." : "Контролёр покажет одноразовый код запроса. Введите его здесь и подтвердите устройством."}</p><form id="confirm-form"><input name="code" ${apiMode ? 'placeholder="QR-данные {&quot;sid&quot;:...}"' : 'inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="6-значный код"'} required><button class="button button-primary wide" ${state.busy || (apiMode && !selected?.enrolled) ? "disabled" : ""}>Подтвердить личность</button></form></div>`}
     <div class="phone-section"><h3>Моё устройство</h3><p>${selected?.enrolled ? "Устройство привязано к профилю" : "Сначала привяжите устройство. Регистрация по одноразовому enroll-коду, без логина и пароля."}</p><label>Enroll-код<input id="enroll-code" autocomplete="off" placeholder="Код от администратора"></label><button class="button button-outline wide" data-action="enroll" ${selected?.enrolled || state.busy ? "disabled" : ""}>${selected?.enrolled ? "✓ Устройство привязано" : "Привязать устройство"}</button>${config.mode === "api" ? `<button class="text-button" data-action="reset-key">Заменить отозванный ключ</button>` : ""}</div>
     <div class="phone-section"><h3>Геолокация</h3><p>Во время открытой смены отправляйте координаты серверу с интервалом ${Math.round((apiMode ? Math.max(30000, config.locationIntervalMs) : config.locationIntervalMs) / 1000)} сек. ${apiMode ? "Статус смены в API не доступен; приём определяет сервер." : ""}</p><div class="location-status">${esc(state.locationStatus)}</div><button class="button button-outline wide" data-action="toggle-location" ${(apiMode ? selected?.enrolled : selected?.status === "inside") ? "" : "disabled"}>${state.locationWatch === null ? "Включить геолокацию" : "Остановить передачу"}</button></div></div></div><div class="phone-explainer"><div class="eyebrow">ИНТЕРФЕЙС РАБОЧЕГО</div><h2>Личный телефон вместо бумажного пропуска</h2><p>На телефоне рабочий подтверждает одноразовый запрос проходной. После входа его местоположение передаётся в пределах открытой смены.</p><div class="note-card"><b>Для работы камеры, ключа устройства и геолокации</b><p>Открывайте сайт по HTTPS или на localhost. Разрешения браузера выдаются пользователем.</p></div></div></div>`;
 }
@@ -215,7 +245,10 @@ function render() {
   paint(shell(content));
   if (state.page === "gate" && state.cameraStream && !state.faceUrl) {
     const video = document.querySelector("#camera-video");
-    if (video) { video.srcObject = state.cameraStream; document.querySelector("#camera-placeholder")?.remove(); }
+    if (video) {
+      if (video.srcObject !== state.cameraStream) video.srcObject = state.cameraStream;
+      document.querySelector("#camera-placeholder")?.remove();
+    }
   }
 }
 
@@ -272,12 +305,19 @@ root.addEventListener("click", async (event) => {
   }
   if (action === "close-dialog") { document.querySelector("#employee-dialog")?.close(); return; }
   if (action === "direction") { clearChallenge(); state.direction = button.dataset.value; render(); return; }
-  if (action === "create-challenge") { await run(async () => { clearChallenge(); state.challenge = await api.createChallenge(state.direction); notify(config.mode === "api" ? "Запрос создан. Передайте QR-данные рабочему." : "Запрос создан. Попросите рабочего подтвердить код на телефоне.", "success"); }); return; }
+  if (action === "create-challenge") { await run(async () => { clearChallenge(); state.challenge = await api.createChallenge(state.direction, state.gateEmployeeId); notify(config.mode === "api" ? "Запрос создан. Передайте QR-данные рабочему." : "Запрос создан. Запрос отправлен выбранному работнику. Попросите его назвать код из профиля.", "success"); }); return; }
+  if (action === "worker-get-code") {
+    await run(async () => {
+      if (!state.workerPassage) throw new Error("Запрос больше недоступен.");
+      await api.confirmPass(state.workerPassage.id, { demoEmployeeId: state.workerId });
+      state.workerPassage = await api.workerPassage(state.workerId);
+    }); return;
+  }
   if (action === "start-camera") {
     try {
       requireSecureContext("Для камеры откройте приложение по HTTPS или на localhost.");
       stopCamera(); state.faceBlob = null; state.faceFrames = []; if (state.faceUrl) URL.revokeObjectURL(state.faceUrl); state.faceUrl = null;
-      state.cameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+      state.cameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
       render();
     } catch { notify("Не удалось включить камеру. Разрешите доступ в браузере и откройте страницу по HTTPS или localhost.", "error"); }
     return;
@@ -287,7 +327,7 @@ root.addEventListener("click", async (event) => {
       const video = document.querySelector("#camera-video");
       if (!video?.videoWidth) throw new Error("Подождите, пока камера начнёт показывать изображение.");
       const canvas = document.createElement("canvas"); canvas.width = video.videoWidth; canvas.height = video.videoHeight;
-      const count = config.mode === "api" ? state.captureCount : 1;
+      const count = 3;
       const frames = [];
       for (let i = 0; i < count; i++) {
         canvas.getContext("2d").drawImage(video, 0, 0);
@@ -349,16 +389,22 @@ root.addEventListener("click", async (event) => {
 });
 
 root.addEventListener("change", (event) => {
-  if (event.target.id === "capture-count") { state.captureCount = Number(event.target.value); return; }
   if (event.target.id === "demo-role") {
-    stopLocation(); clearChallenge(); state.enrollCode = null; demoRole(event.target.value);
+    stopLocation(); clearChallenge(); state.enrollCode = null; state.workerPassage = null; demoRole(event.target.value);
     state.page = allowedPages()[0]; state.dashboard = null; state.worker = null; state.employees = []; state.attempts = [];
     render(); refresh(); return;
   }
-  if (event.target.id === "worker-select") { stopLocation(); state.locationStatus = "Геолокация выключена"; state.workerId = event.target.value; render(); }
+  if (event.target.id === "gate-person-select") { clearChallenge(); state.gateEmployeeId = event.target.value; render(); return; }
+  if (event.target.id === "worker-select") { stopLocation(); state.locationStatus = "Геолокация выключена"; state.workerId = event.target.value; state.workerPassage = null; refresh("worker"); }
   if (event.target.id === "photo-input") document.querySelector("#file-name").textContent = event.target.files[0]?.name || "Выбрать файл";
 });
 root.addEventListener("input", (event) => {
+  if (event.target.id === "gate-person-search") {
+    const query = event.target.value.trim().toLocaleLowerCase("ru");
+    const select = document.querySelector("#gate-person-select");
+    for (const option of select.options) option.hidden = Boolean(option.value && !option.textContent.toLocaleLowerCase("ru").includes(query));
+    return;
+  }
   if (event.target.id !== "employee-search") return;
   const query = event.target.value.toLowerCase();
   document.querySelectorAll("tr[data-search]").forEach(row => { row.hidden = !row.dataset.search.includes(query); });
@@ -384,11 +430,20 @@ root.addEventListener("submit", async (event) => {
     const data = new FormData(form);
     await run(async () => { await api.createGroup(String(data.get("name")).trim(), data.get("parentId")); await refresh("employees"); notify("Группа отправлена серверу.", "success"); }); return;
   }
+  if (form.id === "gate-code-form") {
+    const code = String(new FormData(form).get("code") || "").trim();
+    await run(async () => {
+      if (!state.challenge) throw new Error("Сначала отправьте запрос работнику.");
+      state.challenge = await api.verifyCode(state.challenge.id, code);
+      form.reset();
+      notify("Код подтверждён. Теперь проверьте лицо сотрудника.", "success");
+    }); return;
+  }
   if (form.id === "confirm-form") {
     const code = new FormData(form).get("code").trim();
     await run(async () => {
       const options = await api.passOptions(code);
-      const assertion = config.mode === "demo" ? { demoEmployeeId: state.workerId } : options;
+      const assertion = options;
       if (config.mode !== "demo" && !confirm(`Подтвердить ${dirName(options.direction).toLowerCase()}?`)) return;
       const result = await api.confirmPass(options.challengeId, assertion);
       notify(`Подтверждение отправлено${result.employeeName ? `: ${result.employeeName}` : ""}. Ожидайте решения проходной.`, "success");
@@ -443,8 +498,9 @@ setInterval(async () => {
   }
   if (state.page === "worker") {
     try {
+      const previousPassage = JSON.stringify(state.workerPassage);
       const before = state.worker?.employee || state.employees.find(x => x.id === state.workerId);
-      if (config.mode === "demo") state.employees = await api.employees();
+      if (config.mode === "demo") { state.employees = await api.employees(); state.workerPassage = await api.workerPassage(state.workerId); }
       else state.worker = await api.me();
       const after = state.worker?.employee || state.employees.find(x => x.id === state.workerId);
       if (state.locationWatch !== null && before?.shiftId && after?.shiftId !== before.shiftId) {
@@ -452,7 +508,7 @@ setInterval(async () => {
       }
       const hadError = Boolean(state.loadError);
       state.loadError = null;
-      if (hadError || JSON.stringify(before) !== JSON.stringify(after)) render();
+      if (hadError || previousPassage !== JSON.stringify(state.workerPassage) || JSON.stringify(before) !== JSON.stringify(after)) render();
     } catch (error) {
       const message = errorMessage(error);
       if (state.loadError !== message) { state.loadError = message; render(); }
