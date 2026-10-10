@@ -1,12 +1,14 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.router import common_router
-from app.core.config import settings
-from app.core.handlers import register_exception_handlers
 from app.core.logging import setup_logging
 
+# до импорта роутеров: предупреждения при импорте (auth) должны идти уже в JSON-лог
 setup_logging()
+
+from app.api.router import common_router  # noqa: E402
+from app.core.config import settings  # noqa: E402
+from app.core.handlers import register_exception_handlers  # noqa: E402
 
 app = FastAPI(title="Проходная: бэкенд")
 
