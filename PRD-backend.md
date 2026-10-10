@@ -28,7 +28,7 @@
 |---|---|---|
 | `/face` (модуль распознавания) | ответственный за инфраструктуру | ты пишешь только HTTP-клиент `backend/app/face/` по `face/docs/api.md` v1 (п. 7.1) |
 | `backend/app/llm/` | человек на модели | только вызываешь по контракту из п. 7.2 |
-| `backend/app/core/auth.py` | человек на Keycloak | пишешь **временную** версию по п. 7.3; её заменят |
+| `backend/app/core/auth.py` | человек на Keycloak | валидатор JWT и `current_user`/`require_role` по п. 7.3; публичные роуты входа `/api/auth/*` (п. 8.11) делает бэкенд, они переиспользуют `verify_token` |
 | Фронтенды (React) | фронтендеры | не трогаешь |
 | Keycloak, сиды, симулятор перемещений | человек на Keycloak | не трогаешь |
 
@@ -70,7 +70,7 @@ backend/
       handlers.py          # глобальные обработчики ошибок (п. 5)
       logging.py           # JSON-лог в stdout
       database.py          # engine, SessionLocal, Base
-      auth.py              # ВРЕМЕННЫЙ, см. 7.3
+      auth.py              # ВРЕМЕННЫЙ, см. 7.3; verify_token — общий валидатор JWT
       crypto.py            # verify_es256
     api/                   # роуты: без SQL и бизнес-логики, только вызов сервиса
       router.py            # common_router, /health, подключение роутеров ниже
@@ -117,7 +117,8 @@ FACE_CAMERA_ID=gate-1                     # id камеры для будуще�
 LOCATION_INTERVAL_S=30
 LOCATION_MAX_AGE_S=180
 AUTH_DEV_BYPASS=false                     # true только при локальной разработке до готовности Keycloak
-KC_PUBLIC_URL= KC_INTERNAL_URL=           # используются auth.py
+KC_PUBLIC_URL= KC_INTERNAL_URL=           # используются auth.py и входом операторов (п. 8.11)
+AUTH_REDIRECT_URIS=                       # необязательно: разрешённые redirectUri через запятую; пусто = PUBLIC_APP_URL + "/"
 ```
 
 ## 5. Общие правила API
@@ -489,6 +490,17 @@ def period_summary(s, date_from, date_to) -> dict    # люди, смены, ч�
 - `POST /assistant/summary {date_from, date_to}` → `AssistantAnswer`
 - Роут только собирает `facts_provider` и вызывает `llm.ask` / `llm.summary`. Никакой логики модели и промптов в роутах.
 - Любое исключение из `llm` → `{status: "unavailable", text: "Помощник временно недоступен, попробуйте ещё раз", facts_used: {}}`.
+
+### 8.11 Вход операторов (Keycloak) — публичные роуты, без Bearer
+Контракт с фронтом: `frontend/docs/backend-auth-handoff.md`. Фронт ведёт Authorization Code + PKCE (S256), бэкенд обменивает код на токены. Клиент Keycloak `panel` публичный (без secret). `AUTH_DEV_BYPASS` на эти роуты не влияет. Слои: `api/auth.py` → `services/auth.py` (httpx к `KC_INTERNAL_URL`, таймаут 5 с) → `core/auth.verify_token`.
+- `GET /api/auth/config` → `{authorizationEndpoint: "<KC_PUBLIC_URL>/realms/construction/protocol/openid-connect/auth"}`. `KC_PUBLIC_URL` пуст → 503 `AUTH_UNAVAILABLE` «Вход временно недоступен».
+- `POST /api/auth/exchange {code, codeVerifier, redirectUri}`. `redirectUri` должен точно совпадать с одним из `AUTH_REDIRECT_URIS` (через запятую; пусто = `PUBLIC_APP_URL.rstrip("/") + "/"`), иначе 400 `AUTH_REDIRECT_INVALID` «Недопустимый адрес возврата» — до обращения к Keycloak. Затем `POST {KC_INTERNAL_URL}/realms/construction/protocol/openid-connect/token` (form-urlencoded: `grant_type=authorization_code`, `client_id=panel`, `code`, `code_verifier`, `redirect_uri`).
+- `POST /api/auth/refresh {refreshToken}` — тот же token endpoint, `grant_type=refresh_token`, `client_id=panel`, `refresh_token`.
+- Ответ exchange/refresh (200, `Cache-Control: no-store`): `{accessToken, refreshToken, expiresIn, user: {sub, preferred_username, roles}}`. `expiresIn` = `expires_in` Keycloak. ID token не отдаётся. Access token проверяется тем же валидатором, что и Bearer (подпись по JWKS, `exp`, `iss`, `aud=access-api`, `sub`); `user` и `roles` берутся только из проверенных claims, `roles` = `realm_access.roles` ∩ {`admin`, `manager`, `controller`}.
+- Ошибки: Keycloak ответил 400/401 → 401 `AUTH_CODE_INVALID` «Сессия входа устарела, войдите заново» (exchange) / `AUTH_REFRESH_INVALID` «Сессия истекла, войдите заново» (refresh); access token не прошёл проверку → 401 `AUTH_TOKEN_INVALID` «Не удалось подтвердить вход, войдите заново»; сеть, таймаут, 5xx, любой другой статус, ответ не по контракту, недоступный JWKS → 503 `AUTH_UNAVAILABLE`. Тела ошибок не содержат деталей Keycloak.
+- `POST /api/auth/logout {refreshToken}` → `POST {KC_INTERNAL_URL}/realms/construction/protocol/openid-connect/logout` (`client_id=panel`, `refresh_token`): Keycloak закрывает сессию, refresh больше не работает. Ответ 200 `{"ok": true}` (`no-store`). Токен, который Keycloak отверг (400/401), уже непригоден — тоже 200 (идемпотентно). Keycloak недоступен или ответил иначе — 503 `AUTH_UNAVAILABLE`: токен мог остаться действующим; фронт чистит свои токены независимо от ответа.
+- Лимиты: `code`, `codeVerifier`, `redirectUri` ≤ 2048 символов, `refreshToken` ≤ 8192; все поля обязательные (иначе 422 `VALIDATION`).
+- В лог не попадают тела запросов и ответов, токены, `code`, `codeVerifier`: только тип ошибки и HTTP-код Keycloak.
 
 ## 9. Тесты (pytest)
 

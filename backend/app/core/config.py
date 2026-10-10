@@ -25,16 +25,21 @@ class Settings:
     auth_dev_bypass: bool
     kc_public_url: str
     kc_internal_url: str
+    auth_redirect_uris: list[str]
 
 
 def load_settings() -> Settings:
     """Читает все настройки из переменных окружения; пустое значение = значение по умолчанию."""
     env = os.environ.get
+    public_app_url = env("PUBLIC_APP_URL", "")
+    redirect_uris = [u.strip() for u in (env("AUTH_REDIRECT_URIS") or "").split(",") if u.strip()]
+    if not redirect_uris and public_app_url:
+        redirect_uris = [public_app_url.rstrip("/") + "/"]  # фронт всегда шлёт location.origin + "/"
     return Settings(
         database_url=env("DATABASE_URL", ""),
         data_dir=env("DATA_DIR") or "/data",
         cors_origins=[o.strip() for o in (env("CORS_ORIGINS") or "").split(",") if o.strip()],
-        public_app_url=env("PUBLIC_APP_URL", ""),
+        public_app_url=public_app_url,
         site_tz=env("SITE_TZ") or "Europe/Moscow",
         pass_session_ttl_s=_int("PASS_SESSION_TTL_S", 90),
         pass_code_max_attempts=_int("PASS_CODE_MAX_ATTEMPTS", 5),
@@ -48,6 +53,7 @@ def load_settings() -> Settings:
         auth_dev_bypass=(env("AUTH_DEV_BYPASS") or "false").lower() == "true",
         kc_public_url=env("KC_PUBLIC_URL", ""),
         kc_internal_url=env("KC_INTERNAL_URL", ""),
+        auth_redirect_uris=redirect_uris,
     )
 
 
