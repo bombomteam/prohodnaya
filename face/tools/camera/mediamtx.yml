@@ -1,6 +1,6 @@
 # MediaMTX (MIT) для тестов: айфон-стример (Larix Broadcaster) -> сервер -> модуль читает RTSP.
-# Шаблон: __CAM_PASS__ подставляет run_mediamtx.sh, пароль в репозиторий не попадает.
-# Публикация (айфон) — только с паролем; чтение RTSP и API — только с самого сервера.
+# Шаблон: __CAM_PASS__ и __READ_PASS__ подставляет run_mediamtx.sh, пароли в репозиторий не попадают.
+# Публикация (айфон) — только с паролем; чтение RTSP и API — только с самого сервера и тоже с паролем.
 logLevel: info
 
 api: yes
@@ -25,12 +25,13 @@ authInternalUsers:
     permissions:
       - action: publish
         path: live/gate
-  # чтение без пароля только с хоста (Docker пробрасывает локальные подключения с 172.17.0.1)
-  - user: any
-    pass:
+  # чтение потока и API — только с хоста и только с паролем (без пароля любой процесс мог бы менять конфиг через API)
+  - user: reader
+    pass: __READ_PASS__
     ips: ['127.0.0.1/32', '172.17.0.1/32']
     permissions:
       - action: read
+        path: live/gate
       - action: api
 
 paths:
