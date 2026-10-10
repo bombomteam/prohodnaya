@@ -2,6 +2,7 @@ import { config } from "../config.js";
 import { accessToken, configureAuthTransport } from "./auth.js";
 import { loadDevice, saveDevice, createDevice, parsePassagePayload, signPassage, signLocations } from "./device.js";
 import { demoApi } from "./demo-api.js";
+import { caseZoneById } from "./zones.js";
 
 export class ApiError extends Error {
   constructor(message, status, code) {
@@ -67,10 +68,9 @@ export function mapEvent(event) {
 
 // Each accepted route point is a recorded sighting, not proof of continuous presence.
 export function appearancesFromRoutes(routes, zones) {
-  const names = new Map(zones.map(zone => [String(zone.id), zone.name]));
   return routes.flatMap(route => route.points.map(point => ({
     employeeId: String(route.employeeId), employeeName: route.employeeName,
-    at: point.at, zoneName: point.zoneId == null ? "Вне размеченных зон" : names.get(String(point.zoneId)) || "Зона не определена",
+    at: point.at, zoneName: caseZoneById(point.zoneId, zones) || "Вне трёх заданных зон",
   }))).filter(entry => entry.at && !Number.isNaN(Date.parse(entry.at)))
     .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
 }

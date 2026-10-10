@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { backendApi, mapPerson, mapEvent, appearancesFromRoutes } from "../src/api.js";
+import { CASE_ZONES, caseZoneMetrics } from "../src/zones.js";
 import { session } from "../src/auth.js";
 
 test("backend adapter sends person multipart, passage direction and three frames", async () => {
@@ -55,8 +56,10 @@ test("sightings list uses route timestamps, worker names and configured zone nam
     { employeeId: "1", employeeName: "Иванов Иван", points: [{ at: "2026-10-10T07:00:00Z", zoneId: 2 }] },
     { employeeId: "2", employeeName: "Петров Пётр", points: [{ at: "2026-10-10T08:00:00Z", zoneId: null }] },
   ];
-  const entries = appearancesFromRoutes(routes, [{ id: "2", name: "Склад" }]);
+  const entries = appearancesFromRoutes(routes, [{ id: "2", name: "Место для курения" }]);
   assert.deepEqual(entries.map(({ employeeName, zoneName }) => [employeeName, zoneName]),
-    [["Петров Пётр", "Вне размеченных зон"], ["Иванов Иван", "Склад"]]);
+    [["Петров Пётр", "Вне трёх заданных зон"], ["Иванов Иван", "Курилка"]]);
   assert.equal(entries[1].at, "2026-10-10T07:00:00Z");
+  assert.deepEqual(caseZoneMetrics([{ id: "9", name: "Склад", count: 120 }, { id: "2", name: "Место для курения", count: 4 }]).map(zone => zone.name), CASE_ZONES);
+  assert.equal(caseZoneMetrics([{ id: "9", name: "Склад", count: 120 }])[0].available, false);
 });
