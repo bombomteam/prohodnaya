@@ -108,6 +108,7 @@ PASS_SESSION_TTL_S=90
 ENROLL_CODE_TTL_MIN=60
 FACE_URL=http://face:8000                 # модуль распознавания (порог сходства — в самом модуле)
 FACE_TIMEOUT_S=5                          # таймаут = отказ FACE_SERVICE_UNAVAILABLE
+FACE_CAMERA_ID=gate-1                     # id камеры для будущего режима verify_camera
 LOCATION_INTERVAL_S=30
 LOCATION_MAX_AGE_S=180
 AUTH_DEV_BYPASS=false                     # true только при локальной разработке до готовности Keycloak
@@ -228,18 +229,20 @@ CREATE TABLE audit_log (
 class FaceUnavailable(Exception): ...
 class FaceRejected(Exception): reason: Reason   # 4xx с bad_image / unsupported_format / too_large
 check_reference(image: bytes, filename: str, content_type: str) -> ReferenceCheck      # POST /v1/references/check
-verify_frames(reference: Reference, attempt_id: str,
-              frames: list[tuple[bytes, str, str]]) -> VerifyResult                    # POST /v1/verify/frames
-verify_camera(reference: Reference, attempt_id: str, camera_id: str,
-              since: datetime, until: datetime, wait_ms: int = 3000) -> VerifyResult   # POST /v1/verify/camera (позже)
+verify_frames(reference: Reference, attempt_id: str, frames: list[tuple[bytes, str, str]],
+              gallery: list[GalleryItem] | None = None) -> VerifyResult                # POST /v1/verify/frames
+verify_camera(reference: Reference, attempt_id: str, camera_id: str, since: datetime, until: datetime,
+              wait_ms: int = 3000, gallery: list[GalleryItem] | None = None) -> VerifyResult  # POST /v1/verify/camera (позже)
 ```
-- Модели ответов (pydantic, неизвестные поля игнорируются): `Reason{code,text}`, `ReferenceCheck`, `Reference{embedding, model_version, reference_hash}`, `VerifyResult{attempt_id, status, reason, facts, model_version}`.
+- Модели ответов (pydantic, неизвестные поля игнорируются): `Reason{code,text}`, `ReferenceCheck`, `Reference{embedding, model_version, reference_hash}`, `VerifyResult{attempt_id, status, reason, facts, model_version}`; модель запроса `GalleryItem{id, embedding}`.
+- **`gallery`** (защита «прошёл по телефону коллеги»): эталоны всех ДРУГИХ людей со `status='active'`, у которых есть `face_templates` с той же `model_version`, что у заявленного; `id = "person-<id>"`. Берутся из БД функцией `repositories/persons.py::gallery_for(db, exclude_person_id, model_version)`, в запрос (`request` для frames, JSON для camera) попадают только если список не пуст. Правило модуля: кадр похож на кого-то из `gallery` не меньше, чем на заявленный эталон → `face_mismatch`. Заявленный человек в `gallery` не входит. Модуль эмбеддинги из `gallery` не хранит; бэк их не сравнивает.
+- `FACE_CAMERA_ID` (по умолчанию `gate-1`) — id камеры для `verify_camera`, `settings.face_camera_id`.
 - Модуль возвращает **факты и `status`**, решение принимает бэк: проход `allow` только при верной подписи телефона **и** `status == "ok"`. Клиентские `match`/`verified` не принимаются.
 - Три кода `bad_image`, `unsupported_format`, `too_large` модуль отдаёт через HTTP 4xx с телом `{"reason": {"code", "text"}}` → `FaceRejected(reason)`: на регистрации — 422 `FACE_<CODE>` с `reason.text`, на проходе (Ф4) — `deny` с тем же кодом. Остальное — `internal_error` и прочие не-200, другие 4xx, мусорное тело, таймаут, обрыв, ответ не по контракту → `FaceUnavailable` → отказ `FACE_SERVICE_UNAVAILABLE` / «Сервис распознавания недоступен, попробуйте позже». **Никакой заглушки, возвращающей «ок».** В тестах подменяются `check_reference`/`verify_frames` (monkeypatch) или транспорт httpx (`MockTransport`).
 - Эмбеддинг бэк хранит как строку вместе с `model_version` и `reference_hash` и сам не сравнивает; порог сходства — в модуле.
 - **Коды отказа — единообразно `FACE_<REASON_CODE>`**, где `REASON_CODE` — `reason.code`/`status` модуля в верхнем регистре, а сообщение — `reason.text` модуля как есть:
   - эталон (`references/check`, 422): `FACE_NO_FACE`, `FACE_MULTIPLE_PEOPLE`, `FACE_MULTIPLE_FACES`, `FACE_TURN_TO_CAMERA`, `FACE_TOO_SMALL`, `FACE_LOW_QUALITY`, `FACE_BAD_IMAGE`, `FACE_UNSUPPORTED_FORMAT`, `FACE_TOO_LARGE` (последние три — через 4xx, см. выше);
-  - проход (`verify`, `reason_code` отказа): `FACE_NO_FACE`, `FACE_MULTIPLE_PEOPLE`, `FACE_TURN_TO_CAMERA`, `FACE_TOO_SMALL`, `FACE_LOW_QUALITY`, `FACE_FACE_MISMATCH`, `FACE_SPOOF_SUSPECTED`, `FACE_FRAME_IS_REFERENCE`, `FACE_FRAME_REPLAYED`, `FACE_NO_FRAMES`, `FACE_CAMERA_UNAVAILABLE`, `FACE_REFERENCE_OUTDATED`, а также `FACE_BAD_IMAGE`, `FACE_UNSUPPORTED_FORMAT`, `FACE_TOO_LARGE` (из `FaceRejected`);
+  - проход (`verify`, `reason_code` отказа): `FACE_NO_FACE`, `FACE_FACE_COVERED` (лицо закрыто), `FACE_MULTIPLE_PEOPLE`, `FACE_MULTIPLE_FACES` (второе лицо, в том числе на фото или экране рядом), `FACE_TURN_TO_CAMERA`, `FACE_TOO_SMALL`, `FACE_LOW_QUALITY`, `FACE_FACE_MISMATCH`, `FACE_SPOOF_SUSPECTED`, `FACE_FRAME_IS_REFERENCE`, `FACE_FRAME_REPLAYED`, `FACE_NO_FRAMES`, `FACE_CAMERA_UNAVAILABLE`, `FACE_REFERENCE_OUTDATED`, а также `FACE_BAD_IMAGE`, `FACE_UNSUPPORTED_FORMAT`, `FACE_TOO_LARGE` (из `FaceRejected`);
   - свои коды бэка: `FACE_SERVICE_UNAVAILABLE` (сбой модуля, в том числе `internal_error`), `FACE_UNSUPPORTED_FORMAT` (фото не JPEG/PNG/WEBP по сигнатуре, до вызова модуля).
 - Режим камеры `verify_camera` — будущий (основной режим по api.md): окно `since` = `created_at` сессии, `until` = время подписи + 3 с. В Ф4 не реализуется.
 
@@ -334,9 +337,9 @@ def require_role(*roles: str) -> Depends-callable   # 401 без токена, 4
    - `out` без открытой смены → `NO_OPEN_SHIFT` «Нет открытой смены — вход не был отмечен».
    - Нет эталона → `NO_FACE_TEMPLATE` «У человека нет эталонного фото, обратитесь к администратору».
 3. Лицо:
-   - `face.verify_frames(reference, attempt_id=session_id, frames)`, где `reference` — эталон человека из `face_templates` (`embedding`, `model_version`, `reference_hash`).
-   - `status != "ok"` → `deny`, `reason_code` = `FACE_` + `status.upper()` (например `FACE_FACE_MISMATCH`, `FACE_SPOOF_SUSPECTED`, `FACE_MULTIPLE_PEOPLE`), `reason` = `reason.text` модуля.
-   - `FaceUnavailable` → `deny` `FACE_SERVICE_UNAVAILABLE` «Сервис распознавания недоступен, попробуйте позже».
+   - `face.verify_frames(reference, attempt_id=session_id, frames, gallery=persons.gallery_for(db, person_id, template.model_version))`, где `reference` — эталон человека из `face_templates` (`embedding`, `model_version`, `reference_hash`), `gallery` — эталоны других активных людей (п. 7.1).
+   - `status != "ok"` → `deny`; причина для человека — `reason.text` модуля; в `access_events` пишутся `reason_code` = `FACE_` + `status.upper()` (например `FACE_FACE_MISMATCH`, `FACE_SPOOF_SUSPECTED`, `FACE_MULTIPLE_PEOPLE`, `FACE_MULTIPLE_FACES`, `FACE_FACE_COVERED`) и `reason` = `reason.text`.
+   - `FaceUnavailable` → `deny` `FACE_SERVICE_UNAVAILABLE` «Сервис распознавания недоступен, попробуйте позже», запись в `access_events` обязательна (не пропуск).
    - `allow` только при `status == "ok"` (подпись телефона уже проверена на `/sign`). Собственных проверок лица (число лиц, «живость», медиана, порог) бэк не делает: это факты и решение модуля.
    - `face_score` = `facts.get("similarity")` или NULL, если факта нет.
    - Режим `verify_camera` (видео с камеры, окно `since` = `created_at` сессии, `until` = время подписи + 3 с) — будущий, сейчас не реализуется.
@@ -478,6 +481,7 @@ def period_summary(s, date_from, date_to) -> dict    # люди, смены, ч�
 | 15 | Повтор пачки геоточек | 409 `REPLAYED` |
 | 16 | Каждый отказ выше | есть строка в `access_events` с `reason_code` |
 | 16а | `allow` только при `status == "ok"`: `status=spoof_suspected` при `facts.match=true` → `deny`; `reference_outdated` → `deny` (Ф4) | `FACE_SPOOF_SUSPECTED` / `FACE_REFERENCE_OUTDATED`, `deny` |
+| 16б | `gallery` передаётся в `verify_frames` и не содержит заявленного человека (только другие активные с той же `model_version`); `multiple_faces` / `face_covered` → `deny` `FACE_MULTIPLE_FACES` / `FACE_FACE_COVERED` (Ф4) | в запросе `gallery` без `person-<id>` заявленного; отказ с `reason.text` модуля |
 | 17 | Сбой модуля: `FaceUnavailable` (не-200, таймаут, обрыв, мусорный ответ) | `FACE_SERVICE_UNAVAILABLE`, `deny`, сервер жив |
 | 18 | Тепловая карта: зона без точек | `level="empty"`, присутствует в ответе |
 | 19 | Метрика: известный набор точек | минуты считаются точно по правилу 8.8 |

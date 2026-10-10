@@ -63,6 +63,13 @@ class Reference(_Model):
     reference_hash: str
 
 
+class GalleryItem(_Model):
+    """Эталон другого сотрудника для правила «кадр похож на коллегу не меньше, чем на заявленного»."""
+
+    id: str
+    embedding: str
+
+
 class VerifyResult(_Model):
     attempt_id: str
     status: str  # "ok" или код причины
@@ -119,9 +126,15 @@ def check_reference(image: bytes, filename: str, content_type: str) -> Reference
 
 def verify_frames(
     reference: Reference, attempt_id: str, frames: list[tuple[bytes, str, str]],
+    gallery: list[GalleryItem] | None = None,
 ) -> VerifyResult:
-    """POST /v1/verify/frames: сравнить 1–10 кадров (bytes, filename, content_type) с эталоном."""
+    """POST /v1/verify/frames: сравнить 1–10 кадров (bytes, filename, content_type) с эталоном.
+
+    gallery — эталоны других людей; в запрос попадает, только если не пуст.
+    """
     body = {"attempt_id": attempt_id, "reference": reference.model_dump()}
+    if gallery:
+        body["gallery"] = [g.model_dump() for g in gallery]
     return _post(
         "/v1/verify/frames", VerifyResult,
         data={"request": json.dumps(body)},
@@ -131,11 +144,14 @@ def verify_frames(
 
 def verify_camera(
     reference: Reference, attempt_id: str, camera_id: str, since: datetime, until: datetime, wait_ms: int = 3000,
+    gallery: list[GalleryItem] | None = None,
 ) -> VerifyResult:
     """POST /v1/verify/camera: проверка по видео камеры за окно [since; until]. Пока не используется (Ф4+)."""
     body = {
         "attempt_id": attempt_id, "reference": reference.model_dump(), "camera_id": camera_id,
         "since": _iso(since), "until": _iso(until), "wait_ms": wait_ms,
     }
+    if gallery:
+        body["gallery"] = [g.model_dump() for g in gallery]
     # сервер ждёт кадры до wait_ms, поэтому таймаут запроса больше на это время
     return _post("/v1/verify/camera", VerifyResult, timeout=settings.face_timeout_s + wait_ms / 1000, json=body)

@@ -2,6 +2,7 @@
 from sqlalchemy import Row, and_, exists, select, true
 from sqlalchemy.orm import Session
 
+from app.face import GalleryItem
 from app.models import Device, FaceTemplate, Group, LocationPoint, Person, Shift, Zone
 
 
@@ -16,6 +17,22 @@ def lock(db: Session, person_id: int) -> Person | None:
 
 def get_template(db: Session, person_id: int) -> FaceTemplate | None:
     return db.get(FaceTemplate, person_id)
+
+
+def gallery_for(db: Session, exclude_person_id: int, model_version: str) -> list[GalleryItem]:
+    """Эталоны всех ДРУГИХ активных людей с той же model_version (id = "person-<id>").
+
+    Зачем: защита сценария «прошёл по телефону коллеги». Правило модуля: если кадр похож на кого-то
+    из gallery не меньше, чем на заявленный эталон, это face_mismatch. Заблокированных не берём,
+    эмбеддинги другой model_version несравнимы.
+    """
+    rows = db.execute(
+        select(FaceTemplate.person_id, FaceTemplate.embedding)
+        .join(Person, Person.id == FaceTemplate.person_id)
+        .where(Person.status == "active", Person.id != exclude_person_id, FaceTemplate.model_version == model_version)
+        .order_by(Person.id)
+    )
+    return [GalleryItem(id=f"person-{pid}", embedding=emb) for pid, emb in rows]
 
 
 def add(db: Session, fio: str, position: str | None, group_id: int | None) -> Person:

@@ -119,3 +119,28 @@ def test_4xx_reject_codes_raise_face_rejected(mock_face, code):
 def test_naive_datetime_rejected():
     with pytest.raises(ValueError):
         face.verify_camera(REF, "a1", "gate-1", datetime.now(), datetime.now(timezone.utc))
+
+
+GALLERY = [face.GalleryItem(id="person-2", embedding="BBBB")]
+
+
+def test_verify_frames_gallery_in_request_json_only_if_not_empty(mock_face):
+    seen = mock_face(lambda r: httpx.Response(200, json=VERIFY))
+    face.verify_frames(REF, "a1", [(b"F1", "1.jpg", "image/jpeg")], gallery=GALLERY)
+    face.verify_frames(REF, "a1", [(b"F1", "1.jpg", "image/jpeg")], gallery=[])
+    face.verify_frames(REF, "a1", [(b"F1", "1.jpg", "image/jpeg")])
+
+    def request_json(req):
+        return json.loads(req.content.split(b'name="request"\r\n\r\n', 1)[1].split(b"\r\n--", 1)[0])
+
+    assert request_json(seen[0])["gallery"] == [{"id": "person-2", "embedding": "BBBB"}]
+    assert "gallery" not in request_json(seen[1]) and "gallery" not in request_json(seen[2])
+
+
+def test_verify_camera_gallery_in_json_only_if_not_empty(mock_face):
+    seen = mock_face(lambda r: httpx.Response(200, json=VERIFY))
+    since = datetime(2026, 10, 10, 11, 20, tzinfo=timezone.utc)
+    face.verify_camera(REF, "a1", "gate-1", since, since + timedelta(seconds=6), gallery=GALLERY)
+    face.verify_camera(REF, "a1", "gate-1", since, since + timedelta(seconds=6))
+    assert json.loads(seen[0].content)["gallery"] == [{"id": "person-2", "embedding": "BBBB"}]
+    assert "gallery" not in json.loads(seen[1].content)
