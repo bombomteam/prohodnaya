@@ -1,0 +1,95 @@
+# Откат стенда кнопкой: Actions → «Откат стенда» → Run workflow.
+# Запускает deploy/rollback.sh на сервере. Контракт: docs/pipeline.md.
+name: Откат стенда
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Какой стенд откатить
+        type: choice
+        options: [prod, stage]
+        default: prod
+      release:
+        description: "Куда откатить: previous или RELEASE_ID (список — deploy/releases.sh)"
+        type: string
+        default: previous
+      service:
+        description: Что откатить
+        type: choice
+        # face добавится сюда, когда пайплайн начнёт его собирать.
+        options: [all, frontend, backend, keycloak]
+        default: all
+      restore_db:
+        description: Восстановить БД из дампа целевого релиза
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  rollback:
+    # Прод — только кнопкой с main. Тестовый стенд можно откатывать и с ветки infra/stage,
+    # чтобы проверять правки пайплайна до слияния в main.
+    if: >-
+      github.repository == 'bombomteam/prohodnaya' &&
+      github.event_name == 'workflow_dispatch' &&
+      (github.ref == 'refs/heads/main' ||
+       (inputs.target == 'stage' && github.ref == 'refs/heads/infra/stage'))
+    runs-on: [self-hosted, gpu]
+    environment: ${{ inputs.target == 'prod' && 'production' || 'stage' }}
+    concurrency:
+      group: stand-${{ inputs.target == 'prod' && 'prod' || 'stage' }}
+      cancel-in-progress: false
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          clean: true
+          persist-credentials: false
+
+      - name: Откат
+        env:
+          TARGET: ${{ inputs.target }}
+          RELEASE: ${{ inputs.release }}
+          SERVICE: ${{ inputs.service }}
+          RESTORE_DB: ${{ inputs.restore_db }}
+        run: |
+          set -euo pipefail
+          case "$TARGET" in
+            prod) export STAND_DIR=/srv/prohodnaya STATE_DIR=/srv/prohodnaya-state PROJECT_NAME=prohodnaya ;;
+            stage) export STAND_DIR=/srv/prohodnaya-stage STATE_DIR=/srv/prohodnaya-stage-state PROJECT_NAME=prohodnaya-stage ;;
+            *) echo "::error::Неверный target: $TARGET"; exit 2 ;;
+          esac
+          [[ "$RELEASE" =~ ^(previous|[0-9]{8}T[0-9]{6}Z-[0-9a-f]{7})$ ]] ||
+            { echo "::error::release: previous или RELEASE_ID вида 20261010T153012Z-36d0676"; exit 2; }
+          [[ "$SERVICE" =~ ^(all|[a-z][a-z0-9_-]{0,30})$ ]] || { echo "::error::Неверный service"; exit 2; }
+          [[ "$RESTORE_DB" == true || "$RESTORE_DB" == false ]] || { echo "::error::Неверный restore_db"; exit 2; }
+          args=(--to "$RELEASE" --service "$SERVICE" --trigger rollback)
+          [[ "$RESTORE_DB" == true ]] && args+=(--restore-db)
+          {
+            echo "STAND_DIR=$STAND_DIR"
+            echo "STATE_DIR=$STATE_DIR"
+            echo "PROJECT_NAME=$PROJECT_NAME"
+          } >>"$GITHUB_ENV"
+          "$GITHUB_WORKSPACE/deploy/rollback.sh" "${args[@]}" 2>&1 | tee "$RUNNER_TEMP/rollback.log"
+
+      - name: Итог
+        if: always()
+        run: |
+          {
+            echo "## Откат: ${STAND_DIR:-стенд не выбран}"
+            echo '```'
+            grep -E 'ИТОГ|::error::' "$RUNNER_TEMP/rollback.log" 2>/dev/null || echo "лога нет — откат не запускался"
+            echo '```'
+            if [[ -n "${STATE_DIR:-}" && -f "$GITHUB_WORKSPACE/deploy/releases.sh" ]]; then
+              echo '```'
+              bash "$GITHUB_WORKSPACE/deploy/releases.sh" 2>&1 | tail -n 30 || true
+              echo '```'
+            fi
+          } >>"$GITHUB_STEP_SUMMARY"

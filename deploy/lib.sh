@@ -77,3 +77,45 @@ print(" ".join(sorted(n for n, s in cfg["services"].items() if s.get("build"))))
 }
 
 tag_var() { printf '%s_TAG' "$(printf '%s' "$1" | tr '[:lower:]-' '[:upper:]_')"; }
+
+# rollback/backup: общие функции для rollback.sh, backup-db.sh и restore-db.sh.
+
+# Блокировка без самоблокировки. Если скрипт запущен из deploy.sh/rollback.sh, которые уже
+# держат lock, дескриптор 9 унаследован: берём flock на нём же — это тот же открытый файл,
+# поэтому получаем сразу. take_lock открыл бы файл заново и ждал бы сам себя до LOCK_WAIT.
+# DEPLOY_LOCK_HELD=1 — явный признак «lock держит родитель», тогда ничего не делаем.
+lock_reuse() {
+    [[ "${DEPLOY_LOCK_HELD:-}" == 1 ]] && return 0
+    local fd_path lock_path
+    fd_path=$(readlink -f "/proc/$$/fd/9" 2>/dev/null || true)
+    lock_path=$(readlink -f "$STATE_DIR/lock" 2>/dev/null || true)
+    if [[ -n "$fd_path" && "$fd_path" == "$lock_path" ]]; then
+        flock -w "${LOCK_WAIT:-600}" 9 || die "Не дождались блокировки $STATE_DIR/lock: идёт другой деплой или откат"
+    else
+        take_lock
+    fi
+}
+
+# Запущен ли сервис стенда: svc_running <сервис>
+svc_running() {
+    [[ -n "$(dc ps -q --status running "$1" 2>/dev/null)" ]]
+}
+
+# Ждать, пока контейнер сервиса станет healthy (или просто running, если healthcheck нет):
+# wait_healthy <сервис> [секунд]
+wait_healthy() {
+    local svc=$1 timeout=${2:-180} cid state end
+    end=$((SECONDS + timeout))
+    while ((SECONDS < end)); do
+        cid=$(dc ps -a -q "$svc" 2>/dev/null | head -n1)
+        if [[ -n "$cid" ]]; then
+            state=$(docker inspect -f '{{.State.Status}}/{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$cid" 2>/dev/null || true)
+            case $state in
+                running/healthy | running/) return 0 ;;
+                exited/* | dead/*) return 1 ;;
+            esac
+        fi
+        sleep 3
+    done
+    return 1
+}
