@@ -10,13 +10,17 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 KINDS = ("reference", "gate", "badge", "screen", "print", "no_person", "multi_person", "clip")
 SPOOF_KINDS = ("badge", "screen", "print")
 REF_EXPECTED = ("accept", "reject", "any")
-GATE_EXPECTED = ("match", "unusable", "either", "spoof", "multi_person")
+GATE_EXPECTED = ("match", "unusable", "either", "spoof", "multi_person", "disputed")
 # Живой человек перед камерой: такие кадры участвуют в парах «свой/чужой».
 PROBE_EXPECTED = ("match", "unusable", "either")
+# Спорные кадры (тот же ли человек или живой ли кадр — не решить по виду): считаются и
+# показываются отдельной группой, но не входят ни в успехи, ни в ошибки, ни в пары и
+# статистику для выбора порогов.
+DISPUTED_EXPECTED = ("disputed",)
 KNOWN_TAGS = (
     "helmet", "hat", "hood", "glasses", "smile", "grimace", "tongue", "hands",
     "profile", "back", "wide_angle", "dark", "backlight", "blur", "small_face",
-    "occluded", "borderline",
+    "occluded", "borderline", "two_faces",
 )
 REQUIRED_COLUMNS = ("file", "subject", "kind", "ref_expected", "gate_expected", "tags", "note")
 OPTIONAL_COLUMNS = ("people",)
@@ -113,7 +117,7 @@ def load_labels(path: Path, source: int) -> tuple[list[LabelRow], list[str]]:
             unknown = [t for t in tags if t not in KNOWN_TAGS]
             if unknown:
                 warnings.append(f"{tag}:{line}: незнакомые теги {', '.join(unknown)}")
-            if not subject and (kind == "reference" or gate_expected in PROBE_EXPECTED):
+            if not subject and (kind == "reference" or gate_expected in PROBE_EXPECTED + DISPUTED_EXPECTED):
                 problems.append("пустой subject")
             abs_path = (base / file).resolve()
             if private:

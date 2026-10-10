@@ -1,0 +1,4 @@
+# Настройки actionlint (CI запускает его без флагов). gpu — метка self-hosted раннера стенда.
+self-hosted-runner:
+  labels:
+    - gpu

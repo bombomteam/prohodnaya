@@ -2,7 +2,7 @@ import { config } from "../config.js";
 import { api, appearancesFromRoutes } from "./api.js";
 import { CASE_ZONES, caseZoneById, caseZoneMetrics, caseZoneName } from "./zones.js";
 import { session, allowedPages, canEdit, canManageSite, initAuth, login, logout, demoRole, useWorker } from "./auth.js";
-import { forgetDevice } from "./device.js";
+import { forgetDevice, requireSecureContext } from "./device.js";
 import { createView } from "./view.js";
 
 const root = document.querySelector("#app");
@@ -275,6 +275,7 @@ root.addEventListener("click", async (event) => {
   if (action === "create-challenge") { await run(async () => { clearChallenge(); state.challenge = await api.createChallenge(state.direction); notify(config.mode === "api" ? "Запрос создан. Передайте QR-данные рабочему." : "Запрос создан. Попросите рабочего подтвердить код на телефоне.", "success"); }); return; }
   if (action === "start-camera") {
     try {
+      requireSecureContext("Для камеры откройте приложение по HTTPS или на localhost.");
       stopCamera(); state.faceBlob = null; state.faceFrames = []; if (state.faceUrl) URL.revokeObjectURL(state.faceUrl); state.faceUrl = null;
       state.cameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
       render();
@@ -325,6 +326,8 @@ root.addEventListener("click", async (event) => {
   }
   if (action === "toggle-location") {
     if (state.locationWatch !== null) { stopLocation(); state.locationStatus = "Геолокация выключена"; render(); return; }
+    try { requireSecureContext("Для геолокации откройте приложение по HTTPS или на localhost."); }
+    catch (error) { notify(errorMessage(error), "error"); return; }
     if (!navigator.geolocation) { notify("Этот браузер не поддерживает геолокацию.", "error"); return; }
     const employee = state.worker?.employee || state.employees.find(x => x.id === state.workerId);
     if (config.mode === "demo" && !employee?.shiftId) { notify("Геолокация доступна только во время открытой смены.", "error"); return; }
@@ -459,14 +462,25 @@ setInterval(async () => {
   } finally { polling = false; }
 }, config.pollingMs);
 
-window.addEventListener("operator-session-expired", () => {
+window.addEventListener("operator-session-expired", (event) => {
   stopLocation(); clearChallenge(); Object.assign(session, { kind: "guest", roles: [], name: "" });
   state.employees = []; state.attempts = []; state.dashboard = null; state.enrollCode = null; state.assistant = null;
-  entryError = "Сессия истекла, войдите заново"; render();
+  entryError = event.detail?.message || "Сессия истекла, войдите заново"; render();
 });
 window.addEventListener("beforeunload", () => { stopCamera(); stopLocation(); });
 render();
 try { await initAuth(); } catch (error) { entryError = errorMessage(error); }
 initialized = true;
 state.page = allowedPages()[0] || "overview";
-render(); if (allowedPages().length) await refresh();
+render();
+if (session.kind === "worker") {
+  const activation = new URL(location.href);
+  const code = activation.searchParams.get("code");
+  if (code) {
+    const input = document.querySelector("#enroll-code");
+    if (input) input.value = code;
+    activation.searchParams.delete("code");
+    history.replaceState(null, "", activation.pathname + activation.search + activation.hash);
+  }
+}
+if (allowedPages().length) await refresh();

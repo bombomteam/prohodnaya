@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { ApiError, backendApi, mapPerson, mapEvent, appearancesFromRoutes } from "../src/api.js";
+import { ApiError, request, backendApi, mapPerson, mapEvent, appearancesFromRoutes } from "../src/api.js";
 import { CASE_ZONES, caseZoneMetrics } from "../src/zones.js";
 import { session, initAuth, logout } from "../src/auth.js";
 import { config } from "../config.js";
@@ -80,10 +80,10 @@ test("face upload accepts 1–10 frames, sends controller token and preserves 40
       await assert.rejects(backendApi.decidePass("session-id", "entry", invalid), /от 1 до 10/);
     }
     assert.equal(uploads.length, 3);
-    for (const [code, message] of [[401, "Сессия истекла, войдите заново"], [403, "Недостаточно прав"]]) {
+    for (const code of [401, 403]) {
       status = code;
       await assert.rejects(backendApi.decidePass("session-id", "entry", [frame]), error =>
-        error instanceof ApiError && error.status === code && error.message === message);
+        error instanceof ApiError && error.status === code && error.message === "Ошибка авторизации");
     }
     await logout();
     const before = uploads.length;
@@ -94,6 +94,59 @@ test("face upload accepts 1–10 frames, sends controller token and preserves 40
     config.mode = previous.mode;
     Object.assign(session, previous.session);
     for (const key of ["fetch", "location", "history", "sessionStorage"]) globalThis[key] = previous[key];
+  }
+});
+
+test("phone receives technical refusal messages without expiring an operator session", async () => {
+  const previousFetch = globalThis.fetch, previousWindow = globalThis.window;
+  const target = new EventTarget();
+  let expired = 0;
+  target.addEventListener("operator-session-expired", () => expired++);
+  globalThis.window = target;
+  const failures = [
+    [404, "SESSION_NOT_FOUND", "Попытка прохода не найдена"],
+    [403, "DEVICE_INVALID", "Телефон не подтверждён, обратитесь к администратору"],
+    [409, "SESSION_EXPIRED", "Срок попытки прохода истёк"],
+    [403, "SESSION_FOREIGN", "Эта попытка принадлежит другому работнику"],
+  ];
+  try {
+    for (const [status, code, message] of failures) {
+      globalThis.fetch = async () => Response.json({ code, message }, { status });
+      await assert.rejects(request("/passages/session-id/sign", { method: "POST", auth: "none", body: {} }),
+        error => error instanceof ApiError && error.status === status && error.code === code && error.message === message);
+    }
+    for (const [status, message] of [[401, "Сессия истекла, войдите заново"], [403, "Недостаточно прав"]]) {
+      globalThis.fetch = async () => Response.json({}, { status });
+      await assert.rejects(request("/passages/session-id/sign", { auth: "none" }), error => error.message === message);
+    }
+    assert.equal(expired, 0);
+  } finally {
+    globalThis.fetch = previousFetch;
+    globalThis.window = previousWindow;
+  }
+});
+
+test("200 deny is a business result and face requests wait past the 30 second proxy timeout", async () => {
+  const previous = { fetch: globalThis.fetch, location: globalThis.location, session: { ...session }, timeout: AbortSignal.timeout };
+  globalThis.location = new URL("http://localhost:8080/?devRole=controller");
+  session.dev = true;
+  const timeouts = [];
+  AbortSignal.timeout = milliseconds => { timeouts.push(milliseconds); return previous.timeout(milliseconds); };
+  globalThis.fetch = async () => Response.json({ decision: "deny", reason_code: "FACE_MISMATCH", reason: "Лицо не совпадает с эталоном", person: { fio: "Иванов Иван" } });
+  try {
+    const result = await backendApi.decidePass("session-id", "exit", [new Blob(["jpg"])]);
+    assert.equal(result.outcome, "denied");
+    assert.equal(result.reason, "Лицо не совпадает с эталоном");
+    assert.equal(result.reasonCode, "FACE_MISMATCH");
+    assert.equal(result.direction, "exit");
+    assert.equal(timeouts.at(-1), 35000);
+    await request("/health", { auth: "none" });
+    assert.equal(timeouts.at(-1), 15000);
+  } finally {
+    AbortSignal.timeout = previous.timeout;
+    globalThis.fetch = previous.fetch;
+    globalThis.location = previous.location;
+    Object.assign(session, previous.session);
   }
 });
 

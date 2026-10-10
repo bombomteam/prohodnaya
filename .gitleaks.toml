@@ -1,0 +1,75 @@
+# Конфигурация gitleaks для «Проходной» (используется в .github/workflows/ci.yml).
+# Локальная проверка всей истории:
+#   docker run --rm -v "$PWD:/repo" -w /repo zricethezav/gitleaks:v8.30.1 \
+#     git --config .gitleaks.toml --redact --log-opts=--all .
+
+title = "prohodnaya"
+
+# Стандартные правила gitleaks (ключи облаков, токены, приватные ключи и т. п.).
+[extend]
+useDefault = true
+
+# Пароль в строке подключения PostgreSQL: postgresql+psycopg://user:<пароль>@host.
+[[rules]]
+id = "postgres-url-password"
+description = "Пароль в строке подключения PostgreSQL"
+regex = '''(?i)\bpostgres(?:ql)?(?:\+[a-z0-9]+)?://[^:@/\s'"]+:([^@/\s'"]+)@[^/\s'"]*'''
+secretGroup = 1
+keywords = ["postgres"]
+
+  # Шаблоны вместо пароля: PASSWORD, USER:PASSWORD, ${VAR}, $VAR, <пароль>.
+  [[rules.allowlists]]
+  description = "Плейсхолдеры вместо пароля"
+  regexTarget = "secret"
+  regexes = [
+    '''^(?i)password$''',
+    '''^\$\{?[A-Za-z_][A-Za-z0-9_]*''',
+    '''^<[^>]*>$''',
+  ]
+
+  # Одноразовая БД CI (service postgres в ci.yml), не секрет.
+  [[rules.allowlists]]
+  description = "Тестовая БД CI"
+  condition = "AND"
+  paths = ['''^\.github/workflows/ci\.yml$''']
+  regexes = ['''postgresql\+psycopg://ci:ci@localhost:5432/ci''']
+  regexTarget = "line"
+
+  # Пример в PRD: user:pass@db — заглушка из спецификации.
+  [[rules.allowlists]]
+  description = "Пример строки подключения в PRD"
+  condition = "AND"
+  paths = ['''^PRD-backend\.md$''']
+  regexes = ['''postgresql\+psycopg://user:pass@db:5432/proxodnaya''']
+  regexTarget = "line"
+
+# Непустой пароль/секрет в присваивании в стиле .env или shell:
+# KC_ADMIN1_PASSWORD=..., POSTGRES_PASSWORD=..., JWT_SECRET=...
+[[rules]]
+id = "env-password-assignment"
+description = "Пароль или секрет, присвоенный в .env/shell"
+regex = '''(?m)^[ \t]*(?:export[ \t]+)?(?:KC_[A-Z0-9_]*PASSWORD|POSTGRES_PASSWORD|[A-Z0-9_]*SECRET[A-Z0-9_]*)=['"]?([^\s'"#]+)'''
+secretGroup = 1
+keywords = ["password", "secret"]
+
+  [[rules.allowlists]]
+  description = "Ссылки на переменные и плейсхолдеры"
+  regexTarget = "secret"
+  regexes = [
+    '''^\$''',
+    '''^<[^>]*>$''',
+  ]
+
+# Общие исключения для всех правил.
+[[allowlists]]
+description = "Материалы кейса — исходные данные организаторов"
+paths = ['''^case_prerekvizity/''']
+
+[[allowlists]]
+description = "Плейсхолдеры: __CAM_PASS__, ${VAR}, адреса @example.invalid"
+regexTarget = "match"
+regexes = [
+  '''__CAM_PASS__''',
+  '''\$\{[A-Za-z_][A-Za-z0-9_]*(?::?[-?+=][^}]*)?\}''',
+  '''@example\.invalid''',
+]

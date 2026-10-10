@@ -13,12 +13,12 @@ export class ApiError extends Error {
   }
 }
 
-export async function request(path, { method = "GET", body, signal, auth = "operator", headers = {} } = {}) {
+export async function request(path, { method = "GET", body, signal, auth = "operator", headers = {}, timeoutMs = config.requestTimeoutMs || 15000 } = {}) {
   if (auth === "operator") {
     const token = await accessToken();
     if (token) headers = { ...headers, Authorization: `Bearer ${token}` };
   }
-  const timeout = AbortSignal.timeout(config.requestTimeoutMs || 15000);
+  const timeout = AbortSignal.timeout(timeoutMs);
   const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
   const isForm = body instanceof FormData;
   let response;
@@ -37,9 +37,13 @@ export async function request(path, { method = "GET", body, signal, auth = "oper
   let data;
   try { data = await response.json(); } catch { data = null; }
   if (!response.ok) {
-    if (response.status === 401 && auth === "operator" && typeof window !== "undefined") window.dispatchEvent(new Event("operator-session-expired"));
-    const message = response.status === 401 ? "Сессия истекла, войдите заново" : response.status === 403 ? "Недостаточно прав" :
-      (typeof data?.message === "string" ? data.message : typeof data?.detail === "string" ? data.detail : "Не удалось выполнить действие. Повторите попытку.");
+    const message = typeof data?.message === "string" && data.message.trim() ? data.message :
+      typeof data?.detail === "string" && data.detail.trim() ? data.detail :
+      response.status === 401 ? "Сессия истекла, войдите заново" : response.status === 403 ? "Недостаточно прав" :
+      "Не удалось выполнить действие. Повторите попытку.";
+    if (response.status === 401 && auth === "operator" && typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("operator-session-expired", { detail: { message } }));
+    }
     throw new ApiError(message, response.status, data?.code);
   }
   return data;
@@ -109,7 +113,8 @@ export const backendApi = {
     if (groupId || id) body.set("group_id", String(groupId || ""));
     const photo = form.get("referencePhoto");
     if (photo instanceof Blob && photo.size) body.set("photo", photo, photo.name || "reference.jpg");
-    const person = await request(id ? `/persons/${encodeURIComponent(id)}` : "/persons", { method: id ? "PATCH" : "POST", body });
+    const person = await request(id ? `/persons/${encodeURIComponent(id)}` : "/persons", { method: id ? "PATCH" : "POST", body,
+      timeoutMs: config.faceRequestTimeoutMs || 35000 });
     return { employee: mapPerson(person) };
   },
   enrollmentCode: async id => {
@@ -130,7 +135,8 @@ export const backendApi = {
     }
     const body = new FormData();
     frames.forEach((frame, index) => body.append("frames", frame, `frame-${index + 1}.jpg`));
-    const value = await request(`/passages/${encodeURIComponent(sessionId)}/face`, { method: "POST", body, auth: "operator" });
+    const value = await request(`/passages/${encodeURIComponent(sessionId)}/face`, { method: "POST", body, auth: "operator",
+      timeoutMs: config.faceRequestTimeoutMs || 35000 });
     return { employeeName: value.person?.fio || "", direction, outcome: value.decision === "allow" ? "allowed" : "denied",
       reason: value.reason || (value.decision === "allow" ? "Решение получено от сервера" : "Сервер отказал в проходе"),
       reasonCode: value.reason_code || null, shiftId: value.shift?.id ?? null };

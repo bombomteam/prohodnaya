@@ -11,6 +11,7 @@ EXPECT_TEXT = {
     "either": "пограничный кадр (either)",
     "spoof": "подделка (spoof)",
     "multi_person": "двое и больше в кадре (multi_person)",
+    "disputed": "спорный кадр (disputed)",
 }
 
 
@@ -51,7 +52,7 @@ def _matrix(matrix: dict, statuses: list[str], row_label) -> str:
     return table(["ожидание"] + used + ["всего"], rows)
 
 
-def _gate_block(gate: dict, title_prefix: str = "") -> list[str]:
+def _gate_block(gate: dict, title_prefix: str = "", threshold: float | None = None) -> list[str]:
     L = []
     L.append(_matrix(gate["matrix"], gate["statuses"], lambda e: EXPECT_TEXT.get(e, e)))
     L.append("")
@@ -91,6 +92,19 @@ def _gate_block(gate: dict, title_prefix: str = "") -> list[str]:
                        [[_short(e["file"]), e["subject"], e["expected"], e["status"], e["reason"] or "",
                          e["sim_own"], f"{_f(e['max_other_sim'])} ({e['max_other_subject'] or '—'})",
                          e["tags"]] for e in gate["errors"]]))
+    if gate.get("disputed"):
+        def ge(x):
+            return "—" if x is None or threshold is None else ("да" if x >= threshold else "нет")
+        L.append("")
+        L.append(f"{title_prefix}Спорные кадры (`disputed`, {len(gate['disputed'])}): тот же ли человек или живой ли "
+                 f"кадр — по виду не решить. Не входят ни в успехи, ни в ошибки, ни в пары и сетку порогов; "
+                 f"порог — {_f(threshold)}.")
+        L.append("")
+        L.append(table(["файл", "человек", "статус", "пояснение", "сходство со своим", "≥ порога",
+                        "макс. с чужим (кто)", "чужой ≥ порога", "liveness", "теги"],
+                       [[_short(e["file"]), e["subject"], e["status"], e["reason"] or "", e["sim_own"],
+                         ge(e["sim_own"]), f"{_f(e['max_other_sim'])} ({e['max_other_subject'] or '—'})",
+                         ge(e["max_other_sim"]), e.get("liveness"), e["tags"]] for e in gate["disputed"]]))
     return L
 
 
@@ -234,7 +248,7 @@ def render_report(s: dict) -> str:
 
     # 3. кадры
     L += ["", "## Кадры проходной (фото)", ""]
-    L += _gate_block(s["gate"])
+    L += _gate_block(s["gate"], threshold=s["pairs"]["threshold"])
 
     # 4. пары
     L += ["", "## Пары «свой / чужой»", ""]
@@ -323,7 +337,7 @@ def render_report(s: dict) -> str:
         L.append(f"Роликов {cl['n']}, обработано кадров {cl['frames']}. Итог ролика — по лучшему кадру "
                  f"(сначала качество, затем сходство), людей — максимум по кадрам.")
         L.append("")
-        L += _gate_block(cl["gate"], "Ролики. ")
+        L += _gate_block(cl["gate"], "Ролики. ", threshold=cl["pairs"]["threshold"])
         L.append("")
         cp = cl["pairs"]
         L.append(f"Пары по роликам на пороге {_f(cp['threshold'])}: свои принято "

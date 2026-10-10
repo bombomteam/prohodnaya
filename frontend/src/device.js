@@ -5,11 +5,13 @@ export function base64url(bytes) {
   return btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-function secureContextReady() {
-  if (!globalThis.crypto?.subtle) throw new Error("Для ключа устройства нужен HTTPS или localhost.");
+export function requireSecureContext(message = "Для ключа устройства нужен HTTPS или localhost.") {
+  if (globalThis.isSecureContext === false || !globalThis.crypto?.subtle) throw new Error(message);
 }
 
 async function store(mode, operation) {
+  requireSecureContext();
+  if (!globalThis.indexedDB) throw new Error("Браузер не поддерживает хранение ключа устройства. Откройте приложение в современном браузере.");
   const db = await new Promise((resolve, reject) => {
     const request = indexedDB.open("prohodnaya-device", 1);
     request.onupgradeneeded = () => request.result.createObjectStore("keys");
@@ -32,7 +34,7 @@ export function saveDevice(value) { return store("readwrite", objectStore => obj
 export function forgetDevice() { return store("readwrite", objectStore => objectStore.delete("current")); }
 
 export async function createDevice() {
-  secureContextReady();
+  requireSecureContext();
   const keys = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, false, ["sign", "verify"]);
   return { privateKey: keys.privateKey, publicKey: await crypto.subtle.exportKey("jwk", keys.publicKey) };
 }
@@ -52,7 +54,7 @@ export function passageBytes({ sessionId, nonce, direction }) {
 }
 
 async function sign(device, bytes) {
-  secureContextReady();
+  requireSecureContext();
   if (!device?.deviceId || !device.privateKey) throw new Error("Сначала зарегистрируйте телефон по коду администратора.");
   const signature = await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, device.privateKey, bytes);
   return base64url(signature); // WebCrypto returns raw r||s (64 bytes) for P-256.
