@@ -1,10 +1,11 @@
-from datetime import date, datetime, timezone
+from datetime import date
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
 
-from app.dependency import ManagerDep
-from app.schemas.analytics import HeatmapOut, HeatmapZone, RoutePerson, RoutePoint, RoutesOut
+from app.dependency import DbDep, ManagerDep
+from app.schemas.analytics import HeatmapOut, RoutesOut
+from app.services import analytics as service
 
 router = APIRouter(tags=["analytics"])
 
@@ -28,22 +29,12 @@ FiltersDep = Annotated[Filters, Depends()]
 
 
 @router.get("/analytics/heatmap", response_model=HeatmapOut)
-def heatmap(user: ManagerDep, f: FiltersDep):
+def heatmap(db: DbDep, user: ManagerDep, f: FiltersDep):
     """Минуты присутствия по зонам; все зоны есть в ответе, включая нулевые."""
-    # STUB
-    return HeatmapOut(
-        zones=[
-            HeatmapZone(zone_id=1, name="Склад", minutes=120.0, people_count=3, level="high"),
-            HeatmapZone(zone_id=2, name="Курилка", minutes=0.0, people_count=0, level="empty"),
-        ],
-        outside_minutes=15.0, total_minutes=135.0,
-    )
+    return service.heatmap(db, f.date_from, f.date_to, f.hour_from, f.hour_to, f.person_ids)
 
 
 @router.get("/analytics/routes", response_model=RoutesOut)
-def routes(user: ManagerDep, f: FiltersDep):
+def routes(db: DbDep, user: ManagerDep, f: FiltersDep):
     """Маршруты людей: точки по времени с координатами на плане."""
-    # STUB
-    return RoutesOut(persons=[RoutePerson(person_id=1, fio="Иванов Иван Иванович", points=[
-        RoutePoint(ts=datetime.now(timezone.utc), lat=55.0, lon=37.0, x=10.0, y=20.0, zone_id=1),
-    ])])
+    return service.routes(db, f.date_from, f.date_to, f.hour_from, f.hour_to, f.person_ids)

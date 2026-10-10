@@ -50,12 +50,6 @@ def test_openapi_has_all_paths(bypass):
     assert "/health" in spec["paths"]
 
 
-def test_stub_routes_ok(bypass):
-    # groups/persons/enroll уже реальные (Ф3) и покрыты в test_persons_enroll.py
-    r = client.get("/api/analytics/heatmap?from=2026-01-01&to=2026-01-01")
-    assert r.status_code == 200 and r.json()["zones"][1]["level"] == "empty"
-
-
 def test_face_accepts_one_to_ten_frames(client):
     # 1–10 кадров проходят валидацию (дальше — 404, сессии нет); логика прохода — в test_passages.py
     url = f"/api/passages/{SID}/face"

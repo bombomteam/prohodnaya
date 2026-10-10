@@ -484,6 +484,7 @@ def shift_report(s, shift_id) -> dict
 def person_report(s, person_id, date_from, date_to) -> dict
 def period_summary(s, date_from, date_to) -> dict    # люди, смены, часы, отказы по причинам, открытые смены без выхода
 ```
+Решение команды: `denials`, `period_summary` и `person_report` не считают отказом deny `SESSION_EXPIRED` по сессии, у которой есть `allow` в `access_events` (дубль от повторной отправки уже принятого шага).
 
 ### 8.10 Помощник — `manager`
 - `POST /assistant/ask {question}` → `AssistantAnswer`
