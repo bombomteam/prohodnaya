@@ -26,6 +26,13 @@ class Settings:
     kc_public_url: str
     kc_internal_url: str
     auth_redirect_uris: list[str]
+    llm_provider: str
+    llm_external_url: str
+    llm_external_model: str
+    llm_api_key: str
+    ollama_url: str
+    ollama_model: str
+    llm_timeout_s: float
 
 
 def load_settings() -> Settings:
@@ -54,6 +61,13 @@ def load_settings() -> Settings:
         kc_public_url=env("KC_PUBLIC_URL", ""),
         kc_internal_url=env("KC_INTERNAL_URL", ""),
         auth_redirect_uris=redirect_uris,
+        llm_provider=(env("LLM_PROVIDER") or "ollama").lower(),
+        llm_external_url=env("LLM_EXTERNAL_URL") or "",
+        llm_external_model=env("LLM_EXTERNAL_MODEL") or "",
+        llm_api_key=env("LLM_API_KEY") or "",
+        ollama_url=(env("OLLAMA_URL") or "http://ollama:11434").rstrip("/"),
+        ollama_model=env("OLLAMA_MODEL") or "qwen2.5:1.5b",
+        llm_timeout_s=float(env("LLM_TIMEOUT_S") or 60),
     )
 
 

@@ -13,11 +13,13 @@ UNAVAILABLE = {"status": "unavailable", "text": "Помощник временн
 SUMMARY = {"date_from": "2026-01-01", "date_to": "2026-01-02"}
 
 
-def test_llm_not_ready_returns_unavailable(client):
+def test_empty_db_gives_no_data(client):
+    """На пустой БД модель не вызывается: ответ прямо говорит, что данных нет."""
     for url, body in (("/api/assistant/ask", {"question": "кто на объекте?"}), ("/api/assistant/summary", SUMMARY)):
         r = client.post(url, json=body)
         assert r.status_code == 200
-        assert r.json()["status"] == "unavailable"
+        assert r.json()["status"] == "no_data"
+        assert "Данных нет" in r.json()["text"]
 
 
 def test_llm_exception_gives_unavailable(client, monkeypatch):
