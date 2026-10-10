@@ -63,6 +63,7 @@
   "model_version": "face-v1:<детектор>+<распознавание>",
   "embedding_dim": 512,
   "models_loaded": true,
+  "device": "cuda",
   "cameras": [
     {"camera_id": "gate-1", "online": true, "last_frame_age_ms": 180, "fps_in": 30.1, "fps_analyzed": 4.0}
   ]
@@ -253,6 +254,8 @@ curl -F 'request={"attempt_id":"5d1c…","reference":{"embedding":"…","model_v
 | `FACE_LIVENESS_THRESHOLD` | из `03-stack.md` | Порог пассивного антиспуфинга |
 | `FACE_CONSOLE` | `0` | Включить консоль и живой просмотр |
 | `FACE_THREADS` | `4` | Потоки onnxruntime/OpenCV на модель |
+| `FACE_DEVICE` | `auto` | `auto` — видеокарта (CUDA), если проброшена в контейнер, иначе CPU; `cpu`; `cuda` |
+| `FACE_GPU_MEM_MB` | `1024` | Потолок видеопамяти на одну модель |
 
 Кэши библиотек — только в `/tmp` (tmpfs). Сеть на старте не нужна.
 
