@@ -12,8 +12,25 @@ from app.api.persons import MAX_PHOTO_BYTES
 from app.repositories import devices as devices_repo
 from app.models import AuditLog, Device, EnrollCode, FaceTemplate, Group, Person
 
-PHOTO = ("a.jpg", b"fake-jpeg", "image/jpeg")
-EMB = [0.1, 0.2, 0.3]
+JPEG = b"\xff\xd8\xff\xe0fake-jpeg"
+PNG = b"\x89PNG\r\n\x1a\nfake-png"
+PHOTO = ("a.jpg", JPEG, "image/jpeg")
+
+
+def accepted(embedding: str | None = "EMB1", reference_hash: str | None = "hash1") -> face.ReferenceCheck:
+    """Ответ модуля face: фото принято как эталон."""
+    return face.ReferenceCheck(
+        accepted=True, reason=face.Reason(code="ok", text="Фото пригодно как эталон."), faces_count=1, people_count=1,
+        embedding=embedding, embedding_dim=512, model_version="face-v1:test", reference_hash=reference_hash,
+    )
+
+
+def rejected(code: str, text: str) -> face.ReferenceCheck:
+    """Ответ модуля face: фото не годится (embedding и reference_hash = null)."""
+    return face.ReferenceCheck(
+        accepted=False, reason=face.Reason(code=code, text=text), faces_count=0, people_count=0,
+        embedding=None, embedding_dim=512, model_version="face-v1:test", reference_hash=None,
+    )
 
 
 def _b64u(b: bytes) -> str:
@@ -32,18 +49,23 @@ def make_jwk(private: bool = False) -> dict:
 
 @pytest.fixture
 def fake_face(monkeypatch):
-    """Подмена face.analyze: тест задаёт результат через fake_face.result (или исключение)."""
+    """Подмена face.check_reference: тест задаёт ответ через fake_face.result (или исключение); calls — вызовы."""
 
     class Fake:
-        result = face.FaceAnalysis(faces_count=1, embedding=EMB, quality_issue=None)
+        result = accepted()
+        calls: list[tuple[str, str]]
 
-        def __call__(self, image_bytes):
+        def __init__(self):
+            self.calls = []
+
+        def __call__(self, image, filename, content_type):
+            self.calls.append((filename, content_type))
             if isinstance(self.result, Exception):
                 raise self.result
             return self.result
 
     fake = Fake()
-    monkeypatch.setattr(face, "analyze", fake)
+    monkeypatch.setattr(face, "check_reference", fake)
     return fake
 
 
@@ -84,27 +106,52 @@ def test_groups_create_list_and_parent_check(client, db):
 
 # ---- тест 8: заведение ----
 
-@pytest.mark.parametrize("result, code", [
-    (face.FaceAnalysis(faces_count=0, embedding=None, quality_issue=None), "FACE_NOT_FOUND"),
-    (face.FaceAnalysis(faces_count=2, embedding=None, quality_issue=None), "FACE_MULTIPLE"),
-    (face.FaceAnalysis(faces_count=1, embedding=EMB, quality_issue="blurry"), "FACE_LOW_QUALITY"),
+@pytest.mark.parametrize("code, text", [
+    ("no_face", "На фото не найдено лицо."),
+    ("multiple_people", "На фото несколько человек. Нужен портрет одного человека."),
+    ("multiple_faces", "На фото несколько лиц. Нужен портрет одного человека."),
+    ("too_small", "Лицо на фото слишком маленькое."),
 ])
-def test_bad_photo_rejected_and_nothing_created(client, db, fake_face, tmp_path, result, code):
-    fake_face.result = result
+def test_bad_photo_rejected_and_nothing_created(client, db, fake_face, tmp_path, code, text):
+    fake_face.result = rejected(code, text)
     r = create_person(client)
-    assert r.status_code == 422 and r.json()["code"] == code
+    assert r.status_code == 422
+    assert r.json() == {"code": "FACE_" + code.upper(), "message": text}  # текст модуля как есть
     assert count(db, Person) == 0 and count(db, FaceTemplate) == 0
     assert not list(tmp_path.rglob("*.jpg*"))
     assert audit_actions(db) == []
 
 
-def test_face_messages_verbatim(client, fake_face):
-    fake_face.result = face.FaceAnalysis(faces_count=0, embedding=None, quality_issue=None)
-    assert create_person(client).json()["message"] == "На фото не найдено лицо"
-    fake_face.result = face.FaceAnalysis(faces_count=3, embedding=None, quality_issue=None)
-    assert create_person(client).json()["message"] == "На фото несколько человек, нужен один"
-    fake_face.result = face.FaceAnalysis(faces_count=1, embedding=EMB, quality_issue="too_small")
-    assert create_person(client).json()["message"] == "Лицо слишком мелкое или размыто, переснимите"
+def test_face_rejected_4xx_is_422_no_record(client, db, fake_face):
+    fake_face.result = face.FaceRejected(face.Reason(code="bad_image", text="Файл не открывается как изображение."))
+    r = create_person(client)
+    assert r.status_code == 422
+    assert r.json() == {"code": "FACE_BAD_IMAGE", "message": "Файл не открывается как изображение."}
+    assert count(db, Person) == 0 and count(db, FaceTemplate) == 0
+
+
+def test_face_500_is_503_through_http_client(client, db, monkeypatch):
+    """Настоящий клиент face с транспортом, отвечающим 500: 503 FACE_SERVICE_UNAVAILABLE, записи нет."""
+    import httpx
+
+    monkeypatch.setattr(face, "_transport", httpx.MockTransport(
+        lambda r: httpx.Response(500, json={"reason": {"code": "internal_error", "text": "x"}})))
+    r = create_person(client)
+    assert r.status_code == 503 and r.json()["code"] == "FACE_SERVICE_UNAVAILABLE"
+    assert count(db, Person) == 0
+
+
+def test_unsupported_format_not_sent_to_face(client, db, fake_face):
+    r = client.post("/api/persons", data={"fio": "Иванов Иван"}, files={"photo": ("a.gif", b"GIF89a....", "image/gif")})
+    assert r.status_code == 422 and r.json()["code"] == "FACE_UNSUPPORTED_FORMAT"
+    assert fake_face.calls == [] and count(db, Person) == 0
+
+
+def test_accepted_without_embedding_is_503(client, db, fake_face):
+    fake_face.result = accepted(embedding=None, reference_hash=None)
+    r = create_person(client)
+    assert r.status_code == 503 and r.json()["code"] == "FACE_SERVICE_UNAVAILABLE"
+    assert count(db, Person) == 0
 
 
 def test_face_unavailable_503_no_record(client, db, fake_face):
@@ -126,9 +173,9 @@ def test_create_get_patch_photo(client, db, fake_face, tmp_path):
     assert p["on_site_since"] is None and p["last_seen_at"] is None and p["last_zone"] is None
 
     path = tmp_path / "photos" / f"{p['id']}.jpg"
-    assert path.read_bytes() == b"fake-jpeg"
-    assert db.get(FaceTemplate, p["id"]).photo_path == str(path)
-    assert list(db.get(FaceTemplate, p["id"]).embedding) == pytest.approx(EMB)
+    assert path.read_bytes() == JPEG and fake_face.calls == [("reference.jpg", "image/jpeg")]
+    t = db.get(FaceTemplate, p["id"])
+    assert (t.photo_path, t.embedding, t.model_version, t.reference_hash) == (str(path), "EMB1", "face-v1:test", "hash1")
 
     assert client.get(f"/api/persons/{p['id']}").json() == p
     assert client.get("/api/persons", params={"q": "иван"}).json() == [p]  # ILIKE
@@ -138,17 +185,21 @@ def test_create_get_patch_photo(client, db, fake_face, tmp_path):
     assert client.get("/api/persons", params={"on_site": "false"}).json() == [p]
     assert client.get("/api/persons", params={"status": "blocked"}).json() == []
 
-    # PATCH: пустая строка обнуляет group_id/position, status, новое фото заменяет эталон и файл
-    fake_face.result = face.FaceAnalysis(faces_count=1, embedding=[9.0, 9.0, 9.0], quality_issue=None)
+    # PATCH: пустая строка обнуляет group_id/position, status, новое фото (PNG) заменяет эталон и файл
+    fake_face.result = accepted("EMB2", "hash2")
     r = client.patch(
         f"/api/persons/{p['id']}", data={"fio": "Петров Пётр", "position": "", "group_id": "", "status": "blocked"},
-        files={"photo": ("b.jpg", b"new-jpeg", "image/jpeg")},
+        files={"photo": ("b.png", PNG, "image/png")},
     )
     assert r.status_code == 200, r.text
     q = r.json()
     assert (q["fio"], q["position"], q["group"], q["status"]) == ("Петров Пётр", None, None, "blocked")
-    assert path.read_bytes() == b"new-jpeg" and not list((tmp_path / "photos").glob("*.tmp"))
-    assert list(db.get(FaceTemplate, p["id"]).embedding) == pytest.approx([9.0] * 3)
+    new_path = tmp_path / "photos" / f"{p['id']}.png"
+    assert new_path.read_bytes() == PNG and not path.exists()  # старый .jpg убран
+    assert not list((tmp_path / "photos").glob("*.tmp"))
+    db.expire_all()
+    t = db.get(FaceTemplate, p["id"])
+    assert (t.photo_path, t.embedding, t.reference_hash) == (str(new_path), "EMB2", "hash2")
 
     # group_id: число — назначить, мусор — VALIDATION, несуществующая — GROUP_NOT_FOUND
     assert client.patch(f"/api/persons/{p['id']}", data={"group_id": str(gid)}).json()["group"]["id"] == gid
@@ -160,7 +211,7 @@ def test_create_get_patch_photo(client, db, fake_face, tmp_path):
     assert client.patch(f"/api/persons/{p['id']}").json() == q
 
     r = client.get(f"/api/persons/{p['id']}/photo")
-    assert r.status_code == 200 and r.content == b"new-jpeg" and r.headers["content-type"] == "image/jpeg"
+    assert r.status_code == 200 and r.content == PNG and r.headers["content-type"] == "image/png"
     assert client.get("/api/persons/999/photo").json()["code"] == "PERSON_NOT_FOUND"
     assert client.get("/api/persons/999").status_code == 404
     assert client.patch("/api/persons/999", data={"fio": "X"}).json()["code"] == "PERSON_NOT_FOUND"
@@ -169,11 +220,12 @@ def test_create_get_patch_photo(client, db, fake_face, tmp_path):
 
 def test_patch_bad_photo_changes_nothing(client, db, fake_face, tmp_path):
     pid = create_person(client).json()["id"]
-    fake_face.result = face.FaceAnalysis(faces_count=2, embedding=None, quality_issue=None)
+    fake_face.result = rejected("multiple_faces", "На фото несколько лиц. Нужен портрет одного человека.")
     r = client.patch(f"/api/persons/{pid}", data={"fio": "Другой"}, files={"photo": PHOTO})
-    assert r.status_code == 422 and r.json()["code"] == "FACE_MULTIPLE"
+    assert r.status_code == 422 and r.json()["code"] == "FACE_MULTIPLE_FACES"
     assert db.get(Person, pid).fio == "Иванов Иван"
-    assert (tmp_path / "photos" / f"{pid}.jpg").read_bytes() == b"fake-jpeg"
+    assert (tmp_path / "photos" / f"{pid}.jpg").read_bytes() == JPEG
+    assert db.get(FaceTemplate, pid).embedding == "EMB1"
 
 
 def test_photo_file_write_failure_rolls_back(client, db, fake_face, tmp_path):
@@ -185,8 +237,9 @@ def test_photo_file_write_failure_rolls_back(client, db, fake_face, tmp_path):
 
 def test_photo_too_large_413_no_record(client, db, fake_face, tmp_path):
     big = ("big.jpg", b"x" * (MAX_PHOTO_BYTES + 1), "image/jpeg")
+    assert MAX_PHOTO_BYTES == 15 * 1024 * 1024
     r = client.post("/api/persons", data={"fio": "Иванов Иван"}, files={"photo": big})
-    assert r.status_code == 413 and r.json() == {"code": "PHOTO_TOO_LARGE", "message": "Фото слишком большое, максимум 10 МБ"}
+    assert r.status_code == 413 and r.json() == {"code": "PHOTO_TOO_LARGE", "message": "Фото слишком большое, максимум 15 МБ"}
     assert count(db, Person) == 0 and audit_actions(db) == [] and not list(tmp_path.rglob("*.jpg*"))
     pid = create_person(client).json()["id"]
     assert client.patch(f"/api/persons/{pid}", files={"photo": big}).status_code == 413

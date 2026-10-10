@@ -24,12 +24,12 @@ There is no Python 3.12 on the host (system python3 is 3.9): run backend tests i
 
 # Backend architecture (`backend/app`)
 
-- FastAPI + **sync** SQLAlchemy 2 (PRD-mandated; `face.analyze` is CPU-bound sync). Only assistant routes are `async` (the `llm` contract is async).
+- FastAPI + **sync** SQLAlchemy 2 (PRD-mandated; the face client is sync httpx). Only assistant routes are `async` (the `llm` contract is async).
 - Layers: `api/` (routes, no SQL/logic) → `services/` (business logic) → `repositories/` (DB queries; `repositories/queries.py` is the single source of numbers for analytics, reports and the assistant). `schemas/` pydantic, `models/` ORM, `core/` config/exceptions/handlers/logging/auth/crypto, `dependency.py` holds `XDep = Annotated[...]` wrappers.
 - All §8 routes are under `/api` (`api/router.py`); `/health` stays at the root.
 - Error format everywhere: `{code, message}`, Russian `message`; raise `core.exceptions.ApiError`. Handlers in `core/handlers.py`.
 - `core/auth.py` is temporary (Keycloak owner replaces it; keep `current_user`/`require_role` signatures). `AUTH_DEV_BYPASS=true` gives a dev user with all roles.
-- `app/face/` and `app/llm/` are interfaces owned by other teammates — don't implement them, never add a fake "match"/canned answer. Tests monkeypatch `face`.
+- `app/face/` is the thin HTTP client to the face module (contract `face/docs/api.md` v1); the module itself lives in `/face` and has another owner — don't touch `/face`. `app/llm/` is an interface owned by another teammate — don't implement it. Never add a fake "match"/canned answer; any face failure = deny. Tests monkeypatch `face` functions or the httpx transport.
 - Route bodies still marked `# STUB` are placeholders from Ф1; `tests/test_no_stubs.py` (Ф8) must find none.
 - The pass decision is server-side only: nonce is one-shot and consumed by atomic `UPDATE ... WHERE status=... RETURNING`; every deny writes an `access_events` row.
 

@@ -10,7 +10,7 @@ from app.services import persons as service
 
 router = APIRouter(tags=["persons"])
 
-MAX_PHOTO_BYTES = 10 * 1024 * 1024
+MAX_PHOTO_BYTES = 15 * 1024 * 1024  # как лимит модуля face
 GROUP_ID_MAX = 2**31 - 1  # int4 в БД
 
 
@@ -18,7 +18,7 @@ def _read_photo(photo: UploadFile) -> bytes:
     """Читает не больше лимита (+1 байт для проверки); больше — 413."""
     data = photo.file.read(MAX_PHOTO_BYTES + 1)
     if len(data) > MAX_PHOTO_BYTES:
-        raise ApiError("PHOTO_TOO_LARGE", "Фото слишком большое, максимум 10 МБ", 413)
+        raise ApiError("PHOTO_TOO_LARGE", "Фото слишком большое, максимум 15 МБ", 413)
     return data
 
 
@@ -83,7 +83,11 @@ def update_person(
     )
 
 
-@router.get("/persons/{person_id}/photo", response_class=FileResponse, responses={200: {"content": {"image/jpeg": {}}}})
+@router.get(
+    "/persons/{person_id}/photo", response_class=FileResponse,
+    responses={200: {"content": {"image/jpeg": {}, "image/png": {}, "image/webp": {}}}},
+)
 def get_person_photo(person_id: int, db: DbDep, user: AdminDep):
     """Эталонное фото человека; только для admin."""
-    return FileResponse(service.photo_file(db, person_id), media_type="image/jpeg")
+    path, media_type = service.photo_file(db, person_id)
+    return FileResponse(path, media_type=media_type)

@@ -9,11 +9,7 @@ cryptography==44.0.0
 shapely==2.0.6
 numpy==2.2.1
 PyJWT[crypto]==2.10.1
+httpx==0.28.1  # клиент модуля face (app/face) и тесты
 
 # Тесты
 pytest==8.3.4
-httpx==0.28.1
-
-# Зависимости backend/app/face/ добавит человек на модели (версии подобрать под CPU-образ):
-# insightface==
-# onnxruntime==

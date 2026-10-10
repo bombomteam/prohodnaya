@@ -14,7 +14,7 @@
 Как устроен проход:
 1. Контролёр на планшете начинает проход. Сервер создаёт сессию с одноразовым nonce, планшет показывает QR.
 2. Рабочий сканирует QR телефоном. Телефон подписывает `session_id|nonce|direction` неизвлекаемым ключом ECDSA P-256, созданным в браузере при регистрации.
-3. Планшет снимает 3 кадра лица и отправляет их на сервер.
+3. Планшет снимает 1–10 кадров лица (запасной режим; основной — видеопоток камеры, позже) и отправляет их на сервер.
 4. Сервер сверяет лицо с эталоном **именно того человека, чьим ключом подписано**, и принимает решение `allow` или `deny` с человеческой причиной.
 
 Твоя зона — **только бэкенд и БД**: FastAPI, PostgreSQL, модели, миграции, все роуты, логика прохода, смены, геоточки, зоны, SQL аналитики (`queries.py`), журнал.
@@ -23,7 +23,7 @@
 
 | Модуль | Владелец | Что делаешь ты |
 |---|---|---|
-| `backend/app/face/` | человек на модели | только вызываешь по контракту из п. 7.1 |
+| `/face` (модуль распознавания) | ответственный за инфраструктуру | ты пишешь только HTTP-клиент `backend/app/face/` по `face/docs/api.md` v1 (п. 7.1) |
 | `backend/app/llm/` | человек на модели | только вызываешь по контракту из п. 7.2 |
 | `backend/app/core/auth.py` | человек на Keycloak | пишешь **временную** версию по п. 7.3; её заменят |
 | Фронтенды (React) | фронтендеры | не трогаешь |
@@ -46,7 +46,7 @@
 
 - Python 3.12, FastAPI, Uvicorn, SQLAlchemy 2.x (sync), Alembic, psycopg 3, pydantic v2, python-multipart, cryptography, shapely, numpy, PyJWT[crypto].
 - PostgreSQL 16 в Docker.
-- Зависимости `face/` (insightface, onnxruntime) добавит человек на модели — оставь в `requirements.txt` закомментированный блок с пометкой.
+- Модуль распознавания (`/face`, отдельный сервис, чужой владелец) вызывается по HTTP через httpx; его зависимостей в backend нет.
 
 ```
 compose.yaml               # общий стенд: frontend, db, backend (профиль backend)
@@ -83,7 +83,7 @@ backend/
         zones.py           # попадание точки в полигон, пересчёт zone_id
     repositories/          # запросы к БД
       queries.py           # SQL аналитики и фактов для помощника
-    face/__init__.py       # СУЩЕСТВУЕТ ТОЛЬКО КАК ИНТЕРФЕЙС, см. 7.1
+    face/__init__.py       # HTTP-клиент модуля face (контракт face/docs/api.md v1), см. 7.1
     llm/__init__.py        # СУЩЕСТВУЕТ ТОЛЬКО КАК ИНТЕРФЕЙС, см. 7.2
   tests/
 ```
@@ -106,8 +106,8 @@ PUBLIC_APP_URL=                           # адрес фронта телефо
 SITE_TZ=Europe/Moscow                     # границы «дня» и фильтр часов считаются в этой зоне
 PASS_SESSION_TTL_S=90
 ENROLL_CODE_TTL_MIN=60
-FACE_MATCH_THRESHOLD=0.4
-FACE_MIN_MATCHES=2                        # из 3 кадров
+FACE_URL=http://face:8000                 # модуль распознавания (порог сходства — в самом модуле)
+FACE_TIMEOUT_S=5                          # таймаут = отказ FACE_SERVICE_UNAVAILABLE
 LOCATION_INTERVAL_S=30
 LOCATION_MAX_AGE_S=180
 AUTH_DEV_BYPASS=false                     # true только при локальной разработке до готовности Keycloak
@@ -120,7 +120,7 @@ KC_PUBLIC_URL= KC_INTERNAL_URL=           # используются auth.py
 
 ### Формат ошибки — везде одинаковый
 ```json
-{"code": "FACE_MISMATCH", "message": "Лицо не совпадает с владельцем телефона"}
+{"code": "PERSON_NOT_FOUND", "message": "Человек не найден"}
 ```
 - `message` — по-русски, для человека. `code` — UPPER_SNAKE, для логики фронта.
 - Глобальные обработчики в `main.py`:
@@ -156,7 +156,9 @@ CREATE TABLE persons (
 
 CREATE TABLE face_templates (
   person_id int PRIMARY KEY REFERENCES persons(id) ON DELETE CASCADE,
-  embedding real[] NOT NULL, photo_path text NOT NULL,
+  embedding text NOT NULL,                -- base64 float32 от модуля face; бэк не разбирает
+  model_version text NOT NULL, reference_hash text NOT NULL,
+  photo_path text NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now());
 
 CREATE TABLE enroll_codes (
@@ -220,20 +222,26 @@ CREATE TABLE audit_log (
 
 ## 7. Интерфейсы к чужим модулям
 
-### 7.1 `face` (реализует человек на модели)
+### 7.1 `face` (модуль распознавания, отдельный сервис)
+Контракт — [face/docs/api.md](face/docs/api.md), версия **v1**. Бэкенд ходит в модуль по HTTP (`FACE_URL`, `FACE_TIMEOUT_S`), `backend/app/face/__init__.py` — тонкий синхронный клиент:
 ```python
-# backend/app/face/__init__.py
-class FaceAnalysis(BaseModel):
-    faces_count: int
-    embedding: list[float] | None      # только если лицо ровно одно
-    quality_issue: str | None          # "too_small" | "blurry" | None
-
-def analyze(image_bytes: bytes) -> FaceAnalysis: ...
-def similarity(a: list[float], b: list[float]) -> float: ...   # косинусная
+class FaceUnavailable(Exception): ...
+class FaceRejected(Exception): reason: Reason   # 4xx с bad_image / unsupported_format / too_large
+check_reference(image: bytes, filename: str, content_type: str) -> ReferenceCheck      # POST /v1/references/check
+verify_frames(reference: Reference, attempt_id: str,
+              frames: list[tuple[bytes, str, str]]) -> VerifyResult                    # POST /v1/verify/frames
+verify_camera(reference: Reference, attempt_id: str, camera_id: str,
+              since: datetime, until: datetime, wait_ms: int = 3000) -> VerifyResult   # POST /v1/verify/camera (позже)
 ```
-- Пока модуль не готов, создай файл-интерфейс, где `analyze` бросает `FaceUnavailable`. Бэк ловит это и отвечает отказом `FACE_SERVICE_UNAVAILABLE` / «Сервис распознавания недоступен, попробуйте позже».
-- **Никакой заглушки, возвращающей «совпало».** В тестах `face` подменяется через monkeypatch.
-- Решение «совпало / не совпало» принимает бэк по порогу `FACE_MATCH_THRESHOLD`.
+- Модели ответов (pydantic, неизвестные поля игнорируются): `Reason{code,text}`, `ReferenceCheck`, `Reference{embedding, model_version, reference_hash}`, `VerifyResult{attempt_id, status, reason, facts, model_version}`.
+- Модуль возвращает **факты и `status`**, решение принимает бэк: проход `allow` только при верной подписи телефона **и** `status == "ok"`. Клиентские `match`/`verified` не принимаются.
+- Три кода `bad_image`, `unsupported_format`, `too_large` модуль отдаёт через HTTP 4xx с телом `{"reason": {"code", "text"}}` → `FaceRejected(reason)`: на регистрации — 422 `FACE_<CODE>` с `reason.text`, на проходе (Ф4) — `deny` с тем же кодом. Остальное — `internal_error` и прочие не-200, другие 4xx, мусорное тело, таймаут, обрыв, ответ не по контракту → `FaceUnavailable` → отказ `FACE_SERVICE_UNAVAILABLE` / «Сервис распознавания недоступен, попробуйте позже». **Никакой заглушки, возвращающей «ок».** В тестах подменяются `check_reference`/`verify_frames` (monkeypatch) или транспорт httpx (`MockTransport`).
+- Эмбеддинг бэк хранит как строку вместе с `model_version` и `reference_hash` и сам не сравнивает; порог сходства — в модуле.
+- **Коды отказа — единообразно `FACE_<REASON_CODE>`**, где `REASON_CODE` — `reason.code`/`status` модуля в верхнем регистре, а сообщение — `reason.text` модуля как есть:
+  - эталон (`references/check`, 422): `FACE_NO_FACE`, `FACE_MULTIPLE_PEOPLE`, `FACE_MULTIPLE_FACES`, `FACE_TURN_TO_CAMERA`, `FACE_TOO_SMALL`, `FACE_LOW_QUALITY`, `FACE_BAD_IMAGE`, `FACE_UNSUPPORTED_FORMAT`, `FACE_TOO_LARGE` (последние три — через 4xx, см. выше);
+  - проход (`verify`, `reason_code` отказа): `FACE_NO_FACE`, `FACE_MULTIPLE_PEOPLE`, `FACE_TURN_TO_CAMERA`, `FACE_TOO_SMALL`, `FACE_LOW_QUALITY`, `FACE_FACE_MISMATCH`, `FACE_SPOOF_SUSPECTED`, `FACE_FRAME_IS_REFERENCE`, `FACE_FRAME_REPLAYED`, `FACE_NO_FRAMES`, `FACE_CAMERA_UNAVAILABLE`, `FACE_REFERENCE_OUTDATED`, а также `FACE_BAD_IMAGE`, `FACE_UNSUPPORTED_FORMAT`, `FACE_TOO_LARGE` (из `FaceRejected`);
+  - свои коды бэка: `FACE_SERVICE_UNAVAILABLE` (сбой модуля, в том числе `internal_error`), `FACE_UNSUPPORTED_FORMAT` (фото не JPEG/PNG/WEBP по сигнатуре, до вызова модуля).
+- Режим камеры `verify_camera` — будущий (основной режим по api.md): окно `since` = `created_at` сессии, `until` = время подписи + 3 с. В Ф4 не реализуется.
 
 ### 7.2 `llm` (реализует человек на модели)
 ```python
@@ -267,11 +275,10 @@ def require_role(*roles: str) -> Depends-callable   # 401 без токена, 4
 
 ### 8.2 Люди — `admin`
 - `POST /persons` (multipart: `fio`, `position?`, `group_id?`, `photo`)
-  1. `face.analyze(photo)` **до** создания записи:
-     - 0 лиц → 422 `FACE_NOT_FOUND` «На фото не найдено лицо»
-     - больше одного → 422 `FACE_MULTIPLE` «На фото несколько человек, нужен один»
-     - `quality_issue` → 422 `FACE_LOW_QUALITY` «Лицо слишком мелкое или размыто, переснимите»
-  2. Только при успехе в одной транзакции: `persons` + `face_templates`, фото на диск.
+  1. `face.check_reference(photo, ...)` **до** создания записи (JPEG/PNG/WEBP до 15 МБ; тип определяется по сигнатуре файла):
+     - `accepted=false` → 422 `FACE_<reason.code в верхнем регистре>` (например `FACE_NO_FACE`, `FACE_MULTIPLE_PEOPLE`, `FACE_TOO_SMALL`), `message` = `reason.text` модуля;
+     - `FaceUnavailable` → 503 `FACE_SERVICE_UNAVAILABLE` «Сервис распознавания недоступен, попробуйте позже».
+  2. Только при успехе в одной транзакции: `persons` + `face_templates` (`embedding`, `model_version`, `reference_hash`), фото на диск (`<id>.jpg|png|webp`).
 - `PATCH /persons/{id}` (multipart; все поля необязательны, включая `status` и новое `photo`). Новое фото проходит те же проверки и заменяет эталон.
 - `GET /persons?q=&group_id=&status=&on_site=` → список с текущим состоянием:
   ```
@@ -319,7 +326,7 @@ def require_role(*roles: str) -> Depends-callable   # 401 без токена, 4
 **`GET /passages/{id}`** — `controller` (планшет опрашивает раз в ~1 с)
 → `{session_id, status, direction, expires_at, person: {id, fio}|null, decision, reason_code, reason}`
 
-**`POST /passages/{id}/face`** (multipart, поле `frames` — ровно 3 файла) — `controller`
+**`POST /passages/{id}/face`** (multipart, поле `frames` — 1–10 файлов, кадры по порядку съёмки) — `controller`
 1. Сессия в статусе `signed` и не истекла, иначе `SESSION_EXPIRED`. Отправитель — тот же `controller_sub`, что создал сессию, иначе 403.
 2. Правила по человеку и направлению:
    - `status=blocked` и `direction=in` → отказ `PERSON_BLOCKED` «Доступ заблокирован администратором». Выход заблокированному разрешён.
@@ -327,11 +334,12 @@ def require_role(*roles: str) -> Depends-callable   # 401 без токена, 4
    - `out` без открытой смены → `NO_OPEN_SHIFT` «Нет открытой смены — вход не был отмечен».
    - Нет эталона → `NO_FACE_TEMPLATE` «У человека нет эталонного фото, обратитесь к администратору».
 3. Лицо:
-   - Любой кадр с `faces_count != 1` → `FACE_COUNT` «В кадре должен быть один человек».
-   - Кадры побайтно одинаковы (sha256) или попарная похожесть эмбеддингов кадров > 0,995 → `LIVENESS_FAILED` «Не удалось подтвердить живое лицо, повторите».
-   - Совпадений с эталоном (`similarity >= FACE_MATCH_THRESHOLD`) меньше `FACE_MIN_MATCHES` → `FACE_MISMATCH` «Лицо не совпадает с владельцем телефона».
-   - `FaceUnavailable` → `FACE_SERVICE_UNAVAILABLE`.
-   - В `face_score` пишется медиана похожести.
+   - `face.verify_frames(reference, attempt_id=session_id, frames)`, где `reference` — эталон человека из `face_templates` (`embedding`, `model_version`, `reference_hash`).
+   - `status != "ok"` → `deny`, `reason_code` = `FACE_` + `status.upper()` (например `FACE_FACE_MISMATCH`, `FACE_SPOOF_SUSPECTED`, `FACE_MULTIPLE_PEOPLE`), `reason` = `reason.text` модуля.
+   - `FaceUnavailable` → `deny` `FACE_SERVICE_UNAVAILABLE` «Сервис распознавания недоступен, попробуйте позже».
+   - `allow` только при `status == "ok"` (подпись телефона уже проверена на `/sign`). Собственных проверок лица (число лиц, «живость», медиана, порог) бэк не делает: это факты и решение модуля.
+   - `face_score` = `facts.get("similarity")` или NULL, если факта нет.
+   - Режим `verify_camera` (видео с камеры, окно `since` = `created_at` сессии, `until` = время подписи + 3 с) — будущий, сейчас не реализуется.
 4. Решение и смена — в **одной транзакции**:
    - Атомарно `UPDATE pass_sessions SET status='decided', decision=..., ... WHERE id=:id AND status='signed' RETURNING id`. Пусто → сессию уже решили, отказ `SESSION_EXPIRED`.
    - `allow` + `in` → `INSERT shifts(started_at=now())`. Нарушение `one_open_shift` → `ALREADY_ON_SITE`.
@@ -446,7 +454,7 @@ def period_summary(s, date_from, date_to) -> dict    # люди, смены, ч�
 ## 9. Тесты (pytest)
 
 - Тестовая БД — отдельная база в том же Postgres; таблицы через миграции.
-- `face` подменяется monkeypatch, `AUTH_DEV_BYPASS=true`.
+- Модуль `face` подменяется monkeypatch (или `httpx.MockTransport`), `AUTH_DEV_BYPASS=true`; клиент `app/face` покрыт отдельными unit-тестами.
 - Ключи телефона генерируются в тесте (`cryptography`), подпись конвертируется в `r||s`.
 
 Обязательные сценарии-атаки:
@@ -457,10 +465,10 @@ def period_summary(s, date_from, date_to) -> dict    # люди, смены, ч�
 | 2 | Подпись после истечения TTL | `SESSION_EXPIRED` |
 | 3 | Подпись с правильным `device_id`, но чужим ключом | `DEVICE_INVALID`, сессия остаётся `pending` |
 | 4 | Подпись другой сессии / другого направления | `DEVICE_INVALID` |
-| 5 | Устройство A + лицо человека B | `FACE_MISMATCH` |
-| 6 | Три одинаковых кадра | `LIVENESS_FAILED` |
-| 7 | Два лица в кадре | `FACE_COUNT` |
-| 8 | Групповое фото и фото без лица при заведении | 422, запись **не создана** |
+| 5 | Устройство A + лицо человека B: модуль вернул `face_mismatch` | `FACE_FACE_MISMATCH`, `deny` |
+| 6 | Модуль вернул `spoof_suspected` (фото/экран/повтор кадра) | `FACE_SPOOF_SUSPECTED`, `deny` |
+| 7 | Модуль вернул `multiple_people` (двое в кадре) | `FACE_MULTIPLE_PEOPLE`, `deny` |
+| 8 | `check_reference` вернул `accepted=false` (`multiple_people`, `no_face`) | 422 `FACE_MULTIPLE_PEOPLE` / `FACE_NO_FACE`, запись **не создана** |
 | 9 | Повторная активация по той же ссылке | `ENROLL_CODE_INVALID` |
 | 10 | Новая активация отзывает старое устройство | старое → `DEVICE_INVALID` |
 | 11 | Двойной вход; выход без входа | `ALREADY_ON_SITE`; `NO_OPEN_SHIFT` |
@@ -469,7 +477,8 @@ def period_summary(s, date_from, date_to) -> dict    # люди, смены, ч�
 | 14 | Геоточки без открытой смены и после закрытия | 409 `NO_OPEN_SHIFT` |
 | 15 | Повтор пачки геоточек | 409 `REPLAYED` |
 | 16 | Каждый отказ выше | есть строка в `access_events` с `reason_code` |
-| 17 | `face` бросает `FaceUnavailable` | `FACE_SERVICE_UNAVAILABLE`, сервер жив |
+| 16а | `allow` только при `status == "ok"`: `status=spoof_suspected` при `facts.match=true` → `deny`; `reference_outdated` → `deny` (Ф4) | `FACE_SPOOF_SUSPECTED` / `FACE_REFERENCE_OUTDATED`, `deny` |
+| 17 | Сбой модуля: `FaceUnavailable` (не-200, таймаут, обрыв, мусорный ответ) | `FACE_SERVICE_UNAVAILABLE`, `deny`, сервер жив |
 | 18 | Тепловая карта: зона без точек | `level="empty"`, присутствует в ответе |
 | 19 | Метрика: известный набор точек | минуты считаются точно по правилу 8.8 |
 | 20 | Данные переживают `docker compose restart api` | ручная проверка, описать в README бэка |
@@ -495,7 +504,7 @@ def period_summary(s, date_from, date_to) -> dict    # люди, смены, ч�
 ## 11. Правила для исполнителя
 
 - Не выходи за рамки документа: никаких дополнительных фич, ролей и таблиц без вопроса.
-- Не трогай реализацию `face/`, `llm/`, фронтенды, Keycloak.
+- Не трогай реализацию `/face`, `llm/`, фронтенды, Keycloak.
 - Каждая функция должна быть объяснима человеком за минуту: судьи попросят участника рассказать любой файл. Без лишних абстракций, без «умных» обобщений. Docstring у каждой функции с бизнес-логикой: что делает и почему.
 - Тексты для пользователя — по-русски, без технических кодов и трассировок.
 - Никогда не коммить `.env`, ключи, пароли, фото, веса моделей.
