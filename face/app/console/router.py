@@ -7,7 +7,8 @@
 - ``app.state.pipeline`` — объект с ``analyze(img_rgb, ts) -> FrameAnalysis`` и ``model_version``;
 - ``app.state.decide`` — функция ``decide(frames, reference, mode) -> VerifyResult``;
 - ``app.state.hub`` — CameraHub (``status()``, ``latest(camera_id)`` или ``subscribe(camera_id)``);
-  может отсутствовать, тогда камер нет;
+  может отсутствовать, тогда камер нет. Если у хаба включён канал предпросмотра (``preview_enabled``,
+  ``apreview``), MJPEG идёт кадрами предпросмотра (~30 к/с) с рамками последнего анализа;
 - необязательно: ``app.state.match_threshold``, ``app.state.passive_threshold`` (иначе переменные
   ``FACE_MATCH_THRESHOLD`` / ``FACE_LIVENESS_THRESHOLD``), ``app.state.check_reference(img_rgb) -> dict``
   (ответ как у ``references/check``; если нет — консоль проверяет эталон сама через ``Pipeline.analyze``).
@@ -63,6 +64,8 @@ VIDEO_MAX_SIDE = 1920  # кадры 4K уменьшаются до анализ�
 IMAGE_FORMATS = {"JPEG", "MPO", "PNG", "WEBP"}  # MPO — так Pillow открывает часть JPEG с айфона
 HEIF_BRANDS = {b"heic", b"heix", b"hevc", b"heim", b"heis", b"mif1", b"msf1", b"avif", b"avis"}
 LIVE_IDLE_S = 2.0  # без новых кадров столько секунд → заглушка «нет кадров»
+PREVIEW_JPEG_QUALITY = 75
+PREVIEW_STALE_S = 2.0  # анализ старше показанного кадра на столько — рамки не рисуем
 POLL_S = 0.05
 SSE_PING_S = 10.0
 
@@ -531,6 +534,57 @@ async def camera_frames(hub, camera_id: str, idle_s: float | None = None) -> Asy
                 pass
 
 
+def _preview_enabled(hub) -> bool:
+    return hub is not None and callable(getattr(hub, "apreview", None)) and getattr(hub, "preview_enabled", False) is True
+
+
+async def preview_frames(hub, camera_id: str, idle_s: float | None = None) -> AsyncIterator:
+    """Кадры канала предпросмотра хаба (PreviewFrame) или None раз в idle_s без кадров.
+
+    Каждый следующий кадр ждётся по ``after_seq``: медленный клиент получает самый свежий, без очереди.
+    Заканчивается, когда хаб остановлен.
+    """
+    idle_s = LIVE_IDLE_S if idle_s is None else idle_s
+    last = None
+    while True:
+        pf = await hub.apreview(camera_id, after_seq=last, timeout=idle_s)
+        if pf is None:
+            if getattr(hub, "running", True) is False:
+                return
+            yield None
+            continue
+        last = pf.seq
+        yield pf
+
+
+def _latest_analysis(hub, camera_id: str) -> FrameAnalysis | None:
+    try:
+        fa, _ = _unpack(hub.latest(camera_id)) if callable(getattr(hub, "latest", None)) else (None, None)
+    except KeyError:
+        return None
+    return fa
+
+
+async def preview_jpeg(request: Request, hub, camera_id: str, layer: str, pf) -> bytes | None:
+    """JPEG кадра предпросмотра с рамками последнего анализа. Один раз на кадр и слой для всех клиентов:
+    кеш в app.state по (камера, слой) → (seq, анализ, оверлей)."""
+    fa = _latest_analysis(hub, camera_id)
+    ov = _overlay(request, fa)
+    key = (pf.seq, None if fa is None else (fa.index, fa.ts), ov.similarity, ov.match_threshold,
+           ov.passive_threshold)
+    loop = asyncio.get_running_loop()
+    cache = _state(request, "console_preview_cache")
+    if cache is None:
+        cache = request.app.state.console_preview_cache = {}
+    ent = cache.get((camera_id, layer))
+    if ent is None or ent[0] != key or ent[1] is not loop:
+        age = None if fa is None or not fa.ts else max(0.0, pf.ts - fa.ts)
+        fut = asyncio.ensure_future(run_in_threadpool(
+            render.render_preview_jpeg, pf.bgr, fa, layer, ov, age, PREVIEW_STALE_S, PREVIEW_JPEG_QUALITY))
+        ent = cache[(camera_id, layer)] = (key, loop, fut)
+    return await asyncio.shield(ent[2])
+
+
 def _demo_ref(request: Request) -> Reference | None:
     return _state(request, "console_reference")
 
@@ -579,7 +633,11 @@ async def list_cameras(request: Request):
 
 @router.get("/v1/cameras/{camera_id}/live.mjpeg")
 async def live_mjpeg(request: Request, camera_id: str, layer: str = "people", limit: int = 0):
-    """MJPEG проанализированных кадров с рамками. limit>0 — отдать столько кадров и закончить (тесты, снимок)."""
+    """MJPEG живого видео с рамками. limit>0 — отдать столько кадров и закончить (тесты, снимок).
+
+    Канал предпросмотра хаба включён — кадры ~30 к/с с рамками последнего анализа (и его возрастом);
+    иначе — только проанализированные кадры (~4 к/с).
+    """
     rid = _rid()
     if layer not in ("people", "faces"):
         layer = "people"
@@ -587,6 +645,37 @@ async def live_mjpeg(request: Request, camera_id: str, layer: str = "people", li
         return _error(404, "camera_unavailable", rid)
     hub = _state(request, "hub")
     boundary = "frame"
+
+    def part(out: bytes) -> bytes:
+        return (f"--{boundary}\r\nContent-Type: image/jpeg\r\nContent-Length: {len(out)}\r\n\r\n").encode() + out + b"\r\n"
+
+    async def gen_preview():
+        sent = fails = 0
+        offline = await run_in_threadpool(render.placeholder_jpeg, "Нет кадров с камеры", "No frames from camera")
+        async for pf in preview_frames(hub, camera_id):
+            if pf is None:
+                out = offline
+            else:
+                try:
+                    out = await preview_jpeg(request, hub, camera_id, layer, pf)
+                except Exception as e:
+                    fails += 1
+                    if fails == 1 or fails % 300 == 0:  # не засорять лог 30 раз в секунду
+                        log.error("console: preview render failed (%s), fails=%d", type(e).__name__, fails)
+                    out = None
+                if out is None:
+                    continue
+            yield part(out)
+            sent += 1
+            if limit and sent >= limit:
+                return
+
+    if _preview_enabled(hub):
+        return StreamingResponse(
+            gen_preview(),
+            media_type=f"multipart/x-mixed-replace; boundary={boundary}",
+            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+        )
 
     async def gen():
         sent = 0
@@ -598,7 +687,7 @@ async def live_mjpeg(request: Request, camera_id: str, layer: str = "people", li
                 out = await run_in_threadpool(render.render_jpeg, jpeg, fa, layer, _overlay(request, fa))
                 if out is None:
                     continue
-            yield (f"--{boundary}\r\nContent-Type: image/jpeg\r\nContent-Length: {len(out)}\r\n\r\n").encode() + out + b"\r\n"
+            yield part(out)
             sent += 1
             if limit and sent >= limit:
                 return

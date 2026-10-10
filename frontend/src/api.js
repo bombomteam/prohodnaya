@@ -52,6 +52,11 @@ export async function request(path, { method = "GET", body, signal, auth = "oper
 const directionToBackend = direction => direction === "entry" ? "in" : "out";
 const directionToUi = direction => direction === "in" ? "entry" : "exit";
 
+export function reasonText(value, fallback = "Сервер не сообщил причину") {
+  const text = value?.reason?.text || value?.message || value?.reason;
+  return typeof text === "string" && text.trim() ? text : fallback;
+}
+
 export function mapPerson(person) {
   return {
     id: String(person.id), name: person.fio, company: person.group?.name || "", groupId: person.group?.id ?? null,
@@ -65,8 +70,8 @@ export function mapEvent(event) {
   return {
     id: String(event.id), at: event.ts, employeeId: event.person?.id == null ? null : String(event.person.id),
     employeeName: event.person?.fio || null, direction: event.direction ? directionToUi(event.direction) : null,
-    outcome: event.result === "allow" ? "allowed" : "denied", reason: event.reason || (event.result === "allow" ? "Разрешено сервером" : "Отказ сервера"),
-    reasonCode: event.reason_code || null,
+    outcome: event.result === "allow" ? "allowed" : "denied", reason: reasonText(event, event.result === "allow" ? "Разрешено сервером" : "Отказ сервера"),
+    reasonCode: event.reason?.code || event.reason_code || null,
   };
 }
 
@@ -97,7 +102,7 @@ function mapPassage(value) {
     id: value.session_id, code: value.qr_payload || "", nonce: value.nonce || "",
     direction: directionToUi(value.direction), expiresAt: value.expires_at,
     status: ({ pending: "waiting", signed: "confirmed", decided: "used" })[value.status] || "waiting",
-    personName: value.person?.fio || null, decision: value.decision || null, reason: value.reason || null,
+    personName: value.person?.fio || null, decision: value.decision || null, reason: reasonText(value, ""),
   };
 }
 
@@ -138,8 +143,8 @@ export const backendApi = {
     const value = await request(`/passages/${encodeURIComponent(sessionId)}/face`, { method: "POST", body, auth: "operator",
       timeoutMs: config.faceRequestTimeoutMs || 35000 });
     return { employeeName: value.person?.fio || "", direction, outcome: value.decision === "allow" ? "allowed" : "denied",
-      reason: value.reason || (value.decision === "allow" ? "Решение получено от сервера" : "Сервер отказал в проходе"),
-      reasonCode: value.reason_code || null, shiftId: value.shift?.id ?? null };
+      reason: reasonText(value, value.decision === "allow" ? "Решение получено от сервера" : "Сервер отказал в проходе"),
+      reasonCode: value.reason?.code || value.reason_code || null, shiftId: value.shift?.id ?? null };
   },
   async me() {
     const device = await loadDevice();

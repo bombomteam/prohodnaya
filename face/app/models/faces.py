@@ -25,6 +25,7 @@ from ..types import Face
 
 os.environ.setdefault("ORT_DISABLE_TELEMETRY", "1")
 import onnxruntime as ort  # noqa: E402
+from app import device  # noqa: E402
 
 try:
     ort.disable_telemetry_events()
@@ -147,7 +148,7 @@ def _session(path: Path, threads: int) -> ort.InferenceSession:
     so.inter_op_num_threads = 1
     so.log_severity_level = 3
     so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-    return ort.InferenceSession(str(path), sess_options=so, providers=["CPUExecutionProvider"])
+    return device.session(path, so)
 
 
 class FaceModel:

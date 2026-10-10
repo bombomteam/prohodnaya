@@ -60,6 +60,31 @@ IMAGE_EXT = {".jpg", ".png", ".webp", ".heic"}
 VIDEO_EXT = {".mp4", ".mov", ".webm"}
 
 SESSIONS: dict[str, dict] = {}  # статистика потоков в памяти
+
+# Слайды для живого теста атаки «фото на экране»: только фото пакета кейса (они уже в репозитории).
+REPO = HERE.parents[2]
+P1 = "case_prerekvizity/Case1_Package1/Первый пакет/Персонал"
+P2 = "case_prerekvizity/Case1_Package1/Второй пакет/Персонал"
+SLIDES = [
+    f"{P1}/Ким Андрей Сергеевич/Ким_Андрей_Сергеевич_фото.jpg",
+    f"{P1}/Ким Андрей Сергеевич/Ким_Андрей_Сергеевич_проходная_1.jpg",
+    f"{P1}/Ким Андрей Сергеевич/Ким_Андрей_Сергеевич_проходная_2.jpg",
+    f"{P1}/Ким Андрей Сергеевич/Ким_Андрей_Сергеевич_проходная_4.jpg",
+    f"{P1}/Ким Андрей Сергеевич/Ким_Андрей_Сергеевич_пропуск.jpg",
+    f"{P1}/Ким Денис Сергеевич/Ким_Денис_Сергеевич_проходная_1.jpg",
+    f"{P2}/Петров Андрей Николаевич/Петров_Андрей_Николаевич_проходная_8.jpg",
+    f"{P2}/Назаров Бахтиёр Умарович/Назаров_Бахтиёр_Умарович_проходная_10.jpg",
+]
+SLIDES_HTML = """<!doctype html><html lang=ru><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
+<title>Слайды</title><style>html,body{margin:0;height:100%;background:#000;color:#666;font:14px sans-serif}
+img{position:fixed;inset:0;margin:auto;max-width:100%;max-height:100%;display:none}#n{position:fixed;right:8px;bottom:6px}
+button{position:fixed;inset:0;margin:auto;width:260px;height:80px;font-size:22px}</style></head><body>
+<button id=b>Старт (на весь экран)</button><img id=i><div id=n></div><script>
+const N=__N__,SHOW=6000,BLANK=4000,LOOPS=2;const i=document.getElementById('i'),n=document.getElementById('n');
+document.getElementById('b').onclick=async()=>{document.getElementById('b').remove();try{await document.documentElement.requestFullscreen()}catch(e){}
+await new Promise(r=>setTimeout(r,BLANK));for(let l=0;l<LOOPS;l++)for(let k=0;k<N;k++){i.src='slide/'+k;i.style.display='block';n.textContent=(l*N+k+1);
+await new Promise(r=>setTimeout(r,SHOW));i.style.display='none';n.textContent='';await new Promise(r=>setTimeout(r,BLANK));}
+n.textContent='готово';};</script></body></html>"""
 LOCK = threading.Lock()
 
 
@@ -195,6 +220,25 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            return self.wfile.write(body)
+        if route == "slides":
+            body = SLIDES_HTML.replace("__N__", str(len(SLIDES))).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            return self.wfile.write(body)
+        if route.startswith("slide/"):
+            try:
+                body = (REPO / SLIDES[int(route.split("/", 1)[1])]).read_bytes()
+            except (ValueError, IndexError, OSError):
+                return self._json(404, {"error": "not found"})
+            self.send_response(200)
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "max-age=600")
             self.end_headers()
             return self.wfile.write(body)
         if route == "time":  # для оценки сдвига часов клиента

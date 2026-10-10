@@ -19,14 +19,26 @@ test("demo walkthrough links phone, gate, shift and report", async () => {
   const { employee } = await demoApi.saveEmployee(null, form);
   await demoApi.enroll(employee.id);
 
-  const entry = await demoApi.createChallenge("entry");
-  const entryOptions = await demoApi.passOptions(entry.code);
-  assert.equal(entryOptions.challengeId, entry.id);
+  const entry = await demoApi.createChallenge("entry", employee.id);
+  assert.equal(entry.code, undefined); // Controller must receive the code from the worker.
+  assert.equal(await demoApi.workerPassage("e1"), null);
+  assert.equal((await demoApi.workerPassage(employee.id)).code, null);
+  await assert.rejects(demoApi.confirmPass(entry.id, { demoEmployeeId: "e1" }), /другому работнику/);
+  await assert.rejects(demoApi.verifyCode(entry.id, "000000"), /ещё не подтвердил/);
   await demoApi.confirmPass(entry.id, { demoEmployeeId: employee.id });
+  const code = (await demoApi.workerPassage(employee.id)).code;
+  assert.match(code, /^\d{6}$/);
+  await assert.rejects(demoApi.verifyCode(entry.id, "000000"), /Неверный код/);
+  await assert.rejects(demoApi.decidePass(entry.id, "entry", new Blob(["face"])), /подтверждение/);
+  await demoApi.verifyCode(entry.id, code);
+  await assert.rejects(demoApi.decidePass(entry.id, "entry", new Blob([])), /Снимок/);
+  assert.equal((await demoApi.employees()).find(x => x.id === employee.id).status, "outside");
   const allowed = await demoApi.decidePass(entry.id, "entry", new Blob(["face"]));
   assert.equal(allowed.outcome, "allowed");
   assert.equal(allowed.employee.status, "inside");
   await assert.rejects(demoApi.decidePass(entry.id, "entry", new Blob(["face"])), /подтверждение/i);
+  await assert.rejects(demoApi.verifyCode(entry.id, code), /недоступен/);
+  assert.equal(await demoApi.workerPassage(employee.id), null);
 
   const site = await demoApi.site();
   assert.deepEqual(site.zones, CASE_ZONES);
@@ -47,9 +59,9 @@ test("demo walkthrough links phone, gate, shift and report", async () => {
   assert.equal(sightings[0].employeeName, "Тестовый Рабочий");
   assert.equal(sightings[0].zoneName, "Вне трёх заданных зон");
 
-  const exit = await demoApi.createChallenge("exit");
-  await demoApi.passOptions(exit.code);
+  const exit = await demoApi.createChallenge("exit", employee.id);
   await demoApi.confirmPass(exit.id, { demoEmployeeId: employee.id });
+  await demoApi.verifyCode(exit.id, (await demoApi.workerPassage(employee.id)).code);
   const finished = await demoApi.decidePass(exit.id, "exit", new Blob(["face"]));
   assert.equal(finished.outcome, "allowed");
   assert.equal(finished.employee.status, "outside");
@@ -58,4 +70,23 @@ test("demo walkthrough links phone, gate, shift and report", async () => {
   const report = await demoApi.shiftReport(filters);
   assert.equal(report.people.length, 1);
   assert.equal(report.shifts.length, 1);
+});
+
+test("demo codes expire and a new request invalidates the previous one", async () => {
+  await assert.rejects(demoApi.createChallenge("entry", "missing"), /Выберите сотрудника/);
+  await assert.rejects(demoApi.createChallenge("entry", "e4"), /Телефон не подтверждён/);
+  const previous = await demoApi.createChallenge("entry", "e3");
+  await demoApi.confirmPass(previous.id, { demoEmployeeId: "e3" });
+  const oldCode = (await demoApi.workerPassage("e3")).code;
+  const next = await demoApi.createChallenge("entry", "e3");
+  await assert.rejects(demoApi.verifyCode(previous.id, oldCode), /недоступен/);
+  assert.equal((await demoApi.workerPassage("e3")).id, next.id);
+  const [key, raw] = [...storage.entries()].find(([, value]) => JSON.parse(value).challenges?.some(x => x.id === next.id));
+  const saved = JSON.parse(raw);
+  saved.challenges.find(x => x.id === next.id).expiresAt = "2000-01-01T00:00:00Z";
+  storage.set(key, JSON.stringify(saved));
+  assert.equal((await demoApi.challenge(next.id)).status, "expired");
+  assert.equal(await demoApi.workerPassage("e3"), null);
+  await assert.rejects(demoApi.confirmPass(next.id, { demoEmployeeId: "e3" }), /истекло/);
+  await assert.rejects(demoApi.verifyCode(next.id, oldCode), /истекло/);
 });

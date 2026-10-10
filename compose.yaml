@@ -152,6 +152,10 @@ services:
     user: "10001:10001"
     environment:
       FACE_CAMERAS: ${FACE_CAMERAS:-}
+      FACE_ANALYZE_FPS: ${FACE_ANALYZE_FPS:-4}
+      # auto: видеокарта, если проброшена (стенд: deploy/compose.stand.yaml), иначе CPU.
+      FACE_DEVICE: ${FACE_DEVICE:-auto}
+      FACE_GPU_MEM_MB: ${FACE_GPU_MEM_MB:-2048}
       FACE_MATCH_THRESHOLD: ${FACE_MATCH_THRESHOLD:-}
       FACE_LIVENESS_THRESHOLD: ${FACE_LIVENESS_THRESHOLD:-}
       FACE_CONSOLE: ${FACE_CONSOLE:-0}
@@ -218,6 +222,9 @@ services:
     environment:
       FACE_CONSOLE: "1"
       FACE_CAMERAS: ${FACE_CAMERAS:-}
+      FACE_ANALYZE_FPS: ${FACE_CONSOLE_ANALYZE_FPS:-4}
+      FACE_DEVICE: ${FACE_DEVICE:-auto}
+      FACE_GPU_MEM_MB: ${FACE_GPU_MEM_MB:-2048}
       FACE_THREADS: ${FACE_THREADS:-4}
       ORT_DISABLE_TELEMETRY: "1"
     tmpfs:
