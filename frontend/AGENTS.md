@@ -35,7 +35,8 @@
 
 - `compose.yaml`, `.env.example`;
 - `.github/workflows/*`;
-- `frontend/Dockerfile`, `frontend/docker/*`.
+- `frontend/Dockerfile`, `frontend/docker/*`;
+- `face/` (модуль распознавания лиц, его ведёт ответственный за инфраструктуру).
 
 Если правка в них кажется нужной, остановись и опиши человеку, что и зачем менять. Он согласует это с ответственным за инфраструктуру.
 

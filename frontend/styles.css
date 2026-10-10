@@ -76,3 +76,5 @@
   .phone-frame{width:min(100%,390px);margin:auto}
   .phone-explainer{width:min(100%,390px);margin:auto}
 }
+
+.plan-background{position:absolute;inset:0;width:100%;height:100%;object-fit:fill;pointer-events:none}.zone{position:relative}.map-grid:has(.plan-background) .zone{background-color:#ffffffb8}.mobile-nav{grid-template-columns:repeat(auto-fit,minmax(54px,1fr))}

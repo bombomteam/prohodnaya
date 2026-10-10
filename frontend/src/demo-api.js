@@ -153,7 +153,9 @@ export const demoApi = {
       return date >= filters.from && date <= filters.to && hour >= Number(filters.hourFrom) && hour <= Number(filters.hourTo)
         && (!selected.length || selected.includes(x.employeeId));
     });
-    const zones = state.site.zones.map((name, index) => ({ id: `z${index}`, name, count: points.filter(x => x.x >= 0 && x.x <= 100 && x.y >= 0 && x.y <= 100 && Math.min(2, Math.floor(x.x / (100 / 3))) + Math.min(2, Math.floor(x.y / (100 / 3))) * 3 === index).length }));
+    const cols = Math.ceil(Math.sqrt(state.site.zones.length));
+    const rows = Math.ceil(state.site.zones.length / cols);
+    const zones = state.site.zones.map((name, index) => ({ id: `z${index}`, name, count: points.filter(x => x.x >= 0 && x.x <= 100 && x.y >= 0 && x.y <= 100 && Math.min(cols - 1, Math.floor(x.x / (100 / cols))) + Math.min(rows - 1, Math.floor(x.y / (100 / rows))) * cols === index).length }));
     const routes = [...new Set(points.map(x => x.employeeId))].map(employeeId => ({ employeeId, employeeName: person(state, employeeId)?.name || "Сотрудник", points: points.filter(x => x.employeeId === employeeId).sort((a, b) => a.at.localeCompare(b.at)) }));
     return { metric: "Число полученных точек геолокации в зоне", zones, routes, totalPoints: points.length };
   },
