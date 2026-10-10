@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Консоль распознавания лиц</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <strong>Проходная</strong>
+    <span class="muted">консоль модуля распознавания лиц</span>
+  </div>
+  <div class="camera-pick">
+    <label for="camera">Камера</label>
+    <select id="camera"></select>
+    <span id="camera-status" class="pill pill-gray">нет данных</span>
+  </div>
+</header>
+
+<nav class="tabs" role="tablist">
+  <button role="tab" data-tab="people" aria-selected="true">Камера: люди</button>
+  <button role="tab" data-tab="faces" aria-selected="false">Камера: лица</button>
+  <button role="tab" data-tab="file" aria-selected="false">Проверка файла</button>
+</nav>
+
+<main>
+  <!-- 1. Люди -->
+  <section id="tab-people" class="tab" role="tabpanel">
+    <div class="live">
+      <div class="video">
+        <img id="people-img" alt="Видео с камеры с рамками людей">
+        <p class="video-empty" id="people-empty">Камеры не настроены. Укажите FACE_CAMERAS.</p>
+      </div>
+      <aside class="side">
+        <div class="big-count" id="people-count">—</div>
+        <div class="big-label">людей в зоне прохода</div>
+        <div class="banner banner-red" id="people-warn" hidden>В кадре несколько человек. Проходите по одному.</div>
+        <dl class="facts">
+          <dt>Кадр</dt><dd id="people-ts">—</dd>
+          <dt>Всего рамок людей</dt><dd id="people-boxes">—</dd>
+          <dt>Лиц в кадре</dt><dd id="people-faces">—</dd>
+        </dl>
+        <p class="hint">Зелёная рамка — человек в зоне прохода, серая — далеко на фоне (не считается). Число людей = максимум из людей в зоне и крупных лиц.</p>
+      </aside>
+    </div>
+  </section>
+
+  <!-- 2. Лица -->
+  <section id="tab-faces" class="tab" role="tabpanel" hidden>
+    <div class="live">
+      <div class="video">
+        <img id="faces-img" alt="Видео с камеры с рамками лиц">
+        <p class="video-empty" id="faces-empty">Камеры не настроены. Укажите FACE_CAMERAS.</p>
+      </div>
+      <aside class="side">
+        <div class="status-line" id="faces-status">—</div>
+        <dl class="facts">
+          <dt>Лиц в кадре</dt><dd id="faces-count">—</dd>
+          <dt>Качество лучшего лица</dt><dd id="faces-quality">—</dd>
+          <dt>«Живость» (пассивная)</dt><dd id="faces-live">—</dd>
+          <dt>Сходство с демо-эталоном</dt><dd id="faces-sim">—</dd>
+        </dl>
+
+        <div class="card">
+          <h3>Демо-эталон</h3>
+          <p class="hint">Только для просмотра: хранится в памяти сервиса до перезапуска, на диск не пишется.</p>
+          <form id="ref-form">
+            <input type="file" id="ref-file" accept="image/jpeg,image/png,image/webp" required>
+            <div class="row">
+              <button type="submit">Загрузить эталон</button>
+              <button type="button" id="ref-clear" class="secondary">Сбросить</button>
+            </div>
+          </form>
+          <div id="ref-result" class="result-box" hidden></div>
+        </div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- 3. Проверка файла -->
+  <section id="tab-file" class="tab" role="tabpanel" hidden>
+    <form id="file-form" class="card file-form">
+      <div class="field">
+        <label for="media">Фото или видео для проверки</label>
+        <input type="file" id="media" accept="image/jpeg,image/png,image/webp,video/*" required>
+        <span class="hint">Видео: 4 кадра в секунду, первые 15 с, до 100 МБ. Фото: JPEG, PNG, WEBP до 15 МБ.</span>
+      </div>
+      <div class="field">
+        <label for="reference">Фото эталона (необязательно)</label>
+        <input type="file" id="reference" accept="image/jpeg,image/png,image/webp">
+        <span class="hint">Без эталона — только люди, лица, качество и «живость», без итога сравнения.</span>
+      </div>
+      <div class="row">
+        <button type="submit" id="file-submit">Проверить</button>
+        <span id="file-progress" class="muted"></span>
+      </div>
+      <p class="hint">Файлы обрабатываются в памяти и не сохраняются.</p>
+    </form>
+
+    <div id="file-out" hidden>
+      <div class="grid2">
+        <div class="card" id="result-card">
+          <h3>Итог (как ответ verify)</h3>
+          <div id="result-status" class="status-line">—</div>
+          <dl class="facts" id="result-facts"></dl>
+        </div>
+        <div class="card" id="ref-card">
+          <h3>Эталон</h3>
+          <div id="ref-check" class="status-line">—</div>
+          <dl class="facts" id="ref-facts"></dl>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Кадры</h3>
+        <div class="timeline-legend">
+          <span><i class="sw sw-ok"></i>пригоден</span>
+          <span><i class="sw sw-warn"></i>непригоден</span>
+          <span><i class="sw sw-bad"></i>двое+ / подделка / не совпал</span>
+          <span class="muted">клик по столбцу — открыть кадр, ← → — листать</span>
+        </div>
+        <div class="timeline" id="timeline"></div>
+        <div class="viewer">
+          <div class="canvas-wrap"><canvas id="frame-canvas"></canvas></div>
+          <aside class="side">
+            <div class="row">
+              <button type="button" id="prev" class="secondary">←</button>
+              <span id="frame-pos" class="muted">—</span>
+              <button type="button" id="next" class="secondary">→</button>
+            </div>
+            <div class="status-line" id="frame-status">—</div>
+            <dl class="facts" id="frame-facts"></dl>
+          </aside>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="foot muted">
+  Модуль не принимает решение о проходе: он показывает факты, решение — у бэкенда вместе с подписью телефона.
+</footer>
+<script src="app.js"></script>
+</body>
+</html>
