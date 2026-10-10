@@ -1,0 +1,336 @@
+# CI «Проходной»: проверки на раннерах GitHub (без секретов, без self-hosted).
+#
+# Запускается на PR, на push во все ветки, кроме main, вручную и из других
+# workflow (workflow_call, например deploy.yml на push в main).
+# Обязательная проверка для ruleset — задача `ci-ok`.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches-ignore: [main]
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# При workflow_call `github.workflow` — имя вызывающего workflow, поэтому группа
+# отличается от группы вызывающего (если она не начинается с «ci-») и deadlock нет.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  GITLEAKS_IMAGE: zricethezav/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+  ACTIONLINT_IMAGE: rhysd/actionlint:1.7.7@sha256:887a259a5a534f3c4f36cb02dca341673c6089431057242cdc931e9f133147e9
+
+jobs:
+  changes:
+    name: Что изменилось
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      range: ${{ steps.diff.outputs.range }}
+      frontend: ${{ steps.diff.outputs.frontend }}
+      backend: ${{ steps.diff.outputs.backend }}
+      keycloak: ${{ steps.diff.outputs.keycloak }}
+      face: ${{ steps.diff.outputs.face }}
+      compose: ${{ steps.diff.outputs.compose }}
+      github: ${{ steps.diff.outputs.github }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Диапазон коммитов и изменённые части
+        id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          zero=0000000000000000000000000000000000000000
+          all=false
+          base=""
+          case "$EVENT" in
+            pull_request)
+              head=$PR_HEAD
+              base=$PR_BASE
+              ;;
+            push)
+              head=$HEAD_SHA
+              if [ -n "$PUSH_BEFORE" ] && [ "$PUSH_BEFORE" != "$zero" ] \
+                && git cat-file -e "$PUSH_BEFORE^{commit}" 2>/dev/null; then
+                base=$PUSH_BEFORE
+              else
+                # Новая ветка (before = 000…) или before недоступен: от развилки с main.
+                base=$(git merge-base origin/main "$head" || true)
+              fi
+              ;;
+            *)
+              # workflow_dispatch (в т. ч. через workflow_call) и прочее: проверяем всё.
+              head=$HEAD_SHA
+              all=true
+              ;;
+          esac
+
+          if [ -n "$base" ]; then
+            range="$base..$head"
+            files=$(git diff --name-only "$base...$head")
+          else
+            range="--max-count=1 $head"
+            files=""
+            all=true
+          fi
+          if grep -qxF '.github/workflows/ci.yml' <<<"$files"; then
+            all=true
+          fi
+
+          echo "Событие: $EVENT; диапазон: $range; проверять всё: $all"
+          echo "Изменённые файлы:"
+          printf '%s\n' "${files:-(нет)}" | head -200
+
+          has() {
+            if $all || grep -qE "$1" <<<"$files"; then echo true; else echo false; fi
+          }
+          {
+            echo "range=$range"
+            echo "frontend=$(has '^frontend/')"
+            echo "backend=$(has '^backend/')"
+            echo "keycloak=$(has '^keycloak/')"
+            echo "face=$(has '^face/')"
+            echo "compose=$(has '^(compose\.yaml|\.env\.example|deploy/)')"
+            echo "github=$(has '^\.github/')"
+          } | tee -a "$GITHUB_OUTPUT"
+
+  frontend:
+    name: frontend
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Тесты
+        working-directory: frontend
+        run: npm test
+      - name: Сборка демо для Pages
+        working-directory: frontend
+        run: npm run build:pages
+
+  backend:
+    name: backend
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci -d ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DATABASE_URL: postgresql+psycopg://ci:ci@localhost:5432/ci
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Зависимости
+        working-directory: backend
+        run: pip install -r requirements.txt
+      - name: Тесты (пропуски запрещены)
+        working-directory: backend
+        run: |
+          python -m pytest -q -p no:cacheprovider -rs tests | tee "$RUNNER_TEMP/pytest.log"
+          # Тесты БД тихо пропускаются без доступной БД — в CI это ошибка.
+          if grep -Eq '(^SKIPPED|[0-9]+ skipped)' "$RUNNER_TEMP/pytest.log"; then
+            echo "::error title=Пропущенные тесты::В CI тесты не должны пропускаться (см. SKIPPED выше). Проверьте DATABASE_URL и service postgres; если тест не нужен — удалите его, а не пропускайте."
+            exit 1
+          fi
+      - name: Сборка образа
+        run: docker build -t prohodnaya-backend:ci backend/
+
+  keycloak:
+    name: keycloak
+    needs: changes
+    if: needs.changes.outputs.keycloak == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - name: Импорт realm — валидный JSON
+        run: |
+          shopt -s nullglob
+          files=(keycloak/import/*.json)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error title=keycloak::Нет файлов keycloak/import/*.json"
+            exit 1
+          fi
+          rc=0
+          for f in "${files[@]}"; do
+            if jq empty "$f"; then
+              echo "OK: $f"
+            else
+              echo "::error file=$f,title=keycloak::Невалидный JSON"
+              rc=1
+            fi
+          done
+          exit "$rc"
+      - name: Сборка образа
+        run: docker build -t prohodnaya-keycloak:ci keycloak/
+
+  face:
+    name: face
+    needs: changes
+    if: needs.changes.outputs.face == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - name: Сборка образа
+        run: |
+          if [ -f face/Dockerfile ]; then
+            docker build -t prohodnaya-face:ci face/
+          else
+            echo "::notice title=face::face/Dockerfile пока нет — сборка образа пропущена."
+          fi
+
+  compose:
+    name: compose
+    needs: changes
+    if: needs.changes.outputs.compose == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - name: .env из примера с заглушками обязательных секретов
+        run: |
+          cp .env.example .env
+          # Обязательные переменные — те, что в compose как ${VAR:?…} или ${VAR?…}.
+          sources=(compose*.y*ml)
+          [ -d deploy ] && sources+=(deploy)
+          mapfile -t required < <(grep -rhoE '\$\{[A-Za-z_][A-Za-z0-9_]*:?\?' "${sources[@]}" \
+            | sed -E 's/^\$\{//; s/:?\?$//' | sort -u)
+          for var in "${required[@]}"; do
+            if grep -qE "^${var}=.+" .env; then
+              continue
+            elif grep -qE "^${var}=" .env; then
+              sed -i -E "s|^${var}=\$|${var}=ci-placeholder|" .env
+            else
+              echo "${var}=ci-placeholder" >> .env
+            fi
+            echo "Заглушка для $var"
+          done
+      - name: docker compose config (все профили)
+        run: docker compose --profile '*' config -q
+
+  workflows:
+    name: workflows
+    needs: changes
+    if: needs.changes.outputs.github == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - name: actionlint
+        run: docker run --rm -v "$PWD:/repo" -w /repo "$ACTIONLINT_IMAGE" -color
+
+  hygiene:
+    name: hygiene
+    needs: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      RANGE: ${{ needs.changes.outputs.range }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Запрещённые файлы и размеры
+        run: |
+          read -ra rev_args <<<"$RANGE"
+          bash .github/scripts/check-hygiene.sh "${rev_args[@]}"
+      - name: gitleaks
+        if: ${{ !cancelled() }}
+        run: |
+          read -ra rev_args <<<"$RANGE"
+          count=$(git rev-list --no-merges --count "${rev_args[@]}")
+          echo "Коммитов в диапазоне $RANGE: $count"
+          if [ "$count" -eq 0 ]; then
+            echo "Нет новых коммитов (кроме merge) — gitleaks пропущен."
+            exit 0
+          fi
+          rc=0
+          docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
+            -v "$PWD:/repo" -v "$RUNNER_TEMP:/out" -w /repo "$GITLEAKS_IMAGE" \
+            git --no-banner --no-color --config .gitleaks.toml --redact --exit-code 1 \
+            --report-format json --report-path /out/gitleaks.json \
+            --log-opts="$RANGE" -v . 2>&1 | tee "$RUNNER_TEMP/gitleaks.log" || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            # Аннотация на каждую находку (секрет в отчёте скрыт --redact).
+            jq -r '.[] | "::error file=\(.File),line=\(.StartLine),title=gitleaks: \(.RuleID)::\(.Description) — коммит \(.Commit[0:12]), строка \(.StartLine)"' \
+              "$RUNNER_TEMP/gitleaks.json" 2>/dev/null || true
+            echo "::error title=gitleaks::Найден возможный секрет (см. Finding/File/Line выше). Как исправить: СРАЗУ смените этот пароль/ключ (он уже на GitHub), удалите его из файла обычным коммитом и напишите DevOps. Историю сами не переписывайте (никаких --force). Ложное срабатывание — точечное исключение в .gitleaks.toml (путь + регэксп)."
+            exit "$rc"
+          fi
+          # Защита от тихого «0 commits scanned» (например, если git в контейнере не прочитал репозиторий).
+          if grep -qE '(^|[^0-9])0 commits scanned' "$RUNNER_TEMP/gitleaks.log"; then
+            echo "::error title=gitleaks::gitleaks не просканировал ни одного коммита, хотя в диапазоне их $count."
+            exit 1
+          fi
+
+  ci-ok:
+    name: ci-ok
+    needs: [changes, frontend, backend, keycloak, face, compose, workflows, hygiene]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Итог
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<<"$NEEDS"
+          bad=$(jq -r '[to_entries[] | select(.value.result == "failure" or .value.result == "cancelled") | .key] | join(", ")' <<<"$NEEDS")
+          if [ -n "$bad" ]; then
+            echo "::error title=CI не пройден::Не прошли задачи: $bad"
+            exit 1
+          fi
+          echo "Все задачи прошли или пропущены как неизменённые."
