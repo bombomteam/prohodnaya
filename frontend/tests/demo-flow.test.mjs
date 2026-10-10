@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { demoApi } from "../src/demo-api.js";
+import { appearancesFromRoutes } from "../src/api.js";
 
 const storage = new Map();
 globalThis.localStorage = {
@@ -38,6 +39,10 @@ test("demo walkthrough links phone, gate, shift and report", async () => {
   const analytics = await demoApi.analytics(filters);
   assert.equal(analytics.routes.length, 1);
   assert.equal(analytics.zones.reduce((sum, zone) => sum + zone.count, 0), 1);
+  const sightings = appearancesFromRoutes(analytics.routes, analytics.zones);
+  assert.equal(sightings.length, 1);
+  assert.equal(sightings[0].employeeName, "Тестовый Рабочий");
+  assert.notEqual(sightings[0].zoneName, "Зона не определена");
 
   const exit = await demoApi.createChallenge("exit");
   await demoApi.passOptions(exit.code);
