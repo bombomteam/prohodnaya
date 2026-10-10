@@ -60,10 +60,22 @@ history_add() {
         "${GITHUB_ACTOR:-$(id -un)}" "${run_url:--}" >>"$STATE_DIR/history.log"
 }
 
-# RELEASE_ID последнего успешного релиза, отличного от текущего (для «previous»).
+# RELEASE_ID для «previous»: последний успешный релиз, чьи теги образов отличаются от текущих.
+# Релизы без пересборки (noop) и с теми же тегами пропускаются — иначе откат ничего бы не менял.
 previous_release() {
-    local current
+    local current cur_tags id tags
     current=$(release_get "$STATE_DIR/current.env" RELEASE_ID)
+    cur_tags=$(grep -E '^[A-Z0-9_]+_TAG=' "$STATE_DIR/current.env" 2>/dev/null | sort | tr '\n' ' ')
+    while read -r id; do
+        [[ -z "$id" || "$id" == "$current" ]] && continue
+        [[ -f "$STATE_DIR/releases/$id.env" ]] || continue
+        tags=$(grep -E '^[A-Z0-9_]+_TAG=' "$STATE_DIR/releases/$id.env" | sort | tr '\n' ' ')
+        if [[ "$tags" != "$cur_tags" ]]; then
+            printf '%s\n' "$id"
+            return 0
+        fi
+    done < <(awk -F'\t' '$4 == "ok" { print $2 }' "$STATE_DIR/history.log" | tac)
+    # Все успешные релизы с теми же образами — берём просто последний успешный, отличный от текущего.
     awk -F'\t' -v cur="$current" '$4 == "ok" && $2 != cur { id = $2 } END { print id }' "$STATE_DIR/history.log"
 }
 

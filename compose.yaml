@@ -173,6 +173,37 @@ services:
     networks:
       - face-internal
 
+  # Медиасервер камеры (MediaMTX): айфон/IP-камера публикует RTMP на 1935, модуль face читает RTSP
+  # во внутренней сети. Профиль camera: на сервере включается в COMPOSE_PROFILES. Конфиг — файл модуля
+  # face/tools/camera/mediamtx.compose.yml, пароли — переменными MediaMTX поверх пустых полей pass.
+  # Пустой пароль не даёт открытую публикацию: значение по умолчанию заведомо неверное, и MediaMTX
+  # не стартует с ошибкой про MTX_AUTHINTERNALUSERS_<n>_PASS — задайте CAMERA_*_PASS в .env.
+  camera-relay:
+    <<: *hardened
+    profiles: [camera]
+    image: bluenviron/mediamtx:1.21.2@sha256:c7540465f868a02652118bea5a0daab12a29ac0f6cb8485abd535939ecddf886
+    user: "10002:10002"
+    volumes:
+      - ./face/tools/camera/mediamtx.compose.yml:/mediamtx.yml:ro
+    environment:
+      MTX_AUTHINTERNALUSERS_0_PASS: ${CAMERA_PUBLISH_PASS:-sha256:не-задан-CAMERA_PUBLISH_PASS}
+      MTX_AUTHINTERNALUSERS_1_PASS: ${CAMERA_READ_PASS:-sha256:не-задан-CAMERA_READ_PASS}
+      # Чтение и API — только из внутренней сети face-internal (подсеть ниже, в networks).
+      MTX_AUTHINTERNALUSERS_1_IPS: ${FACE_NET_SUBNET:-172.30.43.0/24}
+    tmpfs:
+      - /tmp:size=16m,uid=10002,gid=10002,mode=0700,noexec,nosuid,nodev
+    ports:
+      # Только приём потока со стримера. RTSP 8554 и API 9997 наружу не публикуются.
+      - "${CAMERA_RTMP_BIND:-0.0.0.0}:${CAMERA_RTMP_PORT:-1935}:1935"
+    # В образе нет оболочки и wget/curl — healthcheck не задать; поток виден в GET /v1/health модуля face.
+    cpus: 1.0
+    mem_limit: 256m
+    pids_limit: 100
+    stop_grace_period: 5s
+    networks:
+      - edge           # для опубликованного порта 1935
+      - face-internal  # RTSP для модуля face
+
   # Сюда добавится ollama (его ведёт другой участник).
 
 volumes:
@@ -185,3 +216,7 @@ networks:
   # Модуль лиц виден только бэкенду; у сети нет выхода наружу.
   face-internal:
     internal: true
+    ipam:
+      config:
+        # На неё ссылается доступ reader в camera-relay (MTX_AUTHINTERNALUSERS_1_IPS).
+        - subnet: ${FACE_NET_SUBNET:-172.30.43.0/24}

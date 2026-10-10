@@ -52,3 +52,22 @@ http://127.0.0.1:8099 {
 		output discard
 	}
 }
+
+# Консоль модуля face (камера с рамками, MJPEG) — только по паролю. Запущена вне compose.
+# CONSOLE_PASS_HASH — bcrypt в base64: caddy hash-password | base64 -w0. Если не задан, действует
+# хеш случайного забытого пароля, т.е. консоль закрыта для всех.
+{$CONSOLE_DOMAIN:console.localhost} {
+	basic_auth {
+		{$CONSOLE_USER:team} {$CONSOLE_PASS_HASH:JDJhJDE0JGNlYkJFdE5Lc0tMdnJGUE8ya3hkMHVEVDdDNklWcDdXM0tKajdkOE9MU21TRExPZ0U3eUZHCg==}
+	}
+	reverse_proxy 127.0.0.1:{$CONSOLE_PORT:8030} {
+		# MJPEG: отдавать кадры сразу, без буферизации; к консоли — только HTTP/1.1.
+		flush_interval -1
+		transport http {
+			versions 1.1
+		}
+	}
+	log {
+		output discard
+	}
+}
