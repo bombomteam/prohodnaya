@@ -299,10 +299,14 @@ jobs:
           fi
           rc=0
           docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
-            -v "$PWD:/repo" -w /repo "$GITLEAKS_IMAGE" \
+            -v "$PWD:/repo" -v "$RUNNER_TEMP:/out" -w /repo "$GITLEAKS_IMAGE" \
             git --no-banner --no-color --config .gitleaks.toml --redact --exit-code 1 \
+            --report-format json --report-path /out/gitleaks.json \
             --log-opts="$RANGE" -v . 2>&1 | tee "$RUNNER_TEMP/gitleaks.log" || rc=$?
           if [ "$rc" -ne 0 ]; then
+            # Аннотация на каждую находку (секрет в отчёте скрыт --redact).
+            jq -r '.[] | "::error file=\(.File),line=\(.StartLine),title=gitleaks: \(.RuleID)::\(.Description) — коммит \(.Commit[0:12]), строка \(.StartLine)"' \
+              "$RUNNER_TEMP/gitleaks.json" 2>/dev/null || true
             echo "::error title=gitleaks::Найден возможный секрет (см. Finding/File/Line выше). Как исправить: убрать его из коммитов ветки (git commit --amend / git rebase -i, затем git push --force-with-lease) и СМЕНИТЬ секрет — он уже на GitHub. Ложное срабатывание — точечное исключение в .gitleaks.toml (путь + регэксп)."
             exit "$rc"
           fi
