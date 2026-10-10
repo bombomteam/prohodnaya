@@ -5,7 +5,9 @@ FACE_DEVICE: auto (по умолчанию) | cpu | cuda.
   (/dev/nvidiactl). Иначе CPU: модуль обязан работать на чистой машине без GPU.
 - cpu — всегда CPU.
 - cuda — то же, что auto, но с предупреждением в лог, если GPU недоступна.
-FACE_GPU_MEM_MB — потолок видеопамяти на одну сессию модели (по умолчанию 1024): A10 делим с помощником.
+FACE_GPU_MEM_MB — бюджет видеопамяти на весь контейнер (по умолчанию 2048). onnxruntime ограничивает память
+по сессиям, поэтому бюджет делится поровну на FACE_GPU_SESSIONS сессий (по умолчанию 6: детектор лиц,
+распознавание, детектор людей, две MiniFASNet, точки лица). A10 делим с помощником.
 """
 from __future__ import annotations
 
@@ -43,14 +45,16 @@ def providers() -> list:
                         ort.preload_dlls()  # CUDA/cuDNN из pip-пакетов nvidia-*
                 except Exception as exc:  # noqa: BLE001 — без GPU-библиотек просто CPU
                     log.warning("preload_dlls: %s", type(exc).__name__)
-                mem = int(os.environ.get("FACE_GPU_MEM_MB", "1024")) * 1024 * 1024
+                budget = int(os.environ.get("FACE_GPU_MEM_MB", "2048"))
+                n = max(1, int(os.environ.get("FACE_GPU_SESSIONS", "6")))
+                mem = budget * 1024 * 1024 // n
                 _providers = [("CUDAExecutionProvider", {
                     "device_id": 0,
                     "arena_extend_strategy": "kSameAsRequested",
                     "gpu_mem_limit": mem,
                     "cudnn_conv_algo_search": "HEURISTIC",
                 }), "CPUExecutionProvider"]
-                log.info("onnxruntime: GPU (CUDA), до %d МБ видеопамяти на модель", mem // 2**20)
+                log.info("onnxruntime: GPU (CUDA), бюджет %d МБ: до %d МБ на модель", budget, mem // 2**20)
             else:
                 _providers = ["CPUExecutionProvider"]
                 log.info("onnxruntime: CPU")

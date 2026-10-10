@@ -255,7 +255,7 @@ curl -F 'request={"attempt_id":"5d1c…","reference":{"embedding":"…","model_v
 | `FACE_CONSOLE` | `0` | Включить консоль и живой просмотр |
 | `FACE_THREADS` | `4` | Потоки onnxruntime/OpenCV на модель |
 | `FACE_DEVICE` | `auto` | `auto` — видеокарта (CUDA), если проброшена в контейнер, иначе CPU; `cpu`; `cuda` |
-| `FACE_GPU_MEM_MB` | `1024` | Потолок видеопамяти на одну модель |
+| `FACE_GPU_MEM_MB` | `2048` | Бюджет видеопамяти на контейнер, делится поровну между моделями (`FACE_GPU_SESSIONS`, 6) |
 
 Кэши библиотек — только в `/tmp` (tmpfs). Сеть на старте не нужна.
 
