@@ -1,0 +1,9 @@
+{
+  "name": "prohodnaya-frontend",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "build:pages": "node scripts/build-pages.mjs"
+  }
+}
