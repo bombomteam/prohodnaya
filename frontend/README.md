@@ -2,14 +2,14 @@
 
 Статическое приложение на ES-модулях без npm-зависимостей и сборщика. Правила работы: [AGENTS.md](AGENTS.md).
 
-Из каталога frontend:
+Из каталога `frontend`:
 
 ```powershell
 python -m http.server 8080
+npm test
+npm run build:pages
 ```
 
-Открыть http://localhost:8080. Для проверки выполнить `npm test` и `npm run build:pages`; установка пакетов не требуется.
+Открыть http://localhost:8080. Деморежим работает без сервера и не доказывает безопасность прохода. В API-режиме фронтенд соответствует схемам backend, слитого из `feature/svyat`; настройка и ограничения описаны в [контракте](docs/frontend-api.md). Для локальной проверки операторских экранов нужны `?devRole=admin|manager|controller` и `AUTH_DEV_BYPASS=true` на backend.
 
-Демо показывает раздельные интерфейсы admin, manager, controller и рабочего. Оно не доказывает серверную безопасность. В API-режиме операторы используют Keycloak, рабочий — ключ устройства без пароля. Серверная интеграция требует согласования предложенного [контракта](docs/frontend-api.md).
-
-См. [запуск](docs/launch.md), [исправления и проверки](docs/review-followup.md).
+См. [запуск](docs/launch.md) и [ограничения](docs/limitations.md).
