@@ -281,9 +281,12 @@ async def verify_frames(request: Request):
     st = request.app.state
 
     def work():
-        images = [decode_image(b) for b in blobs]
+        pool = getattr(pipeline, "frame_pool", None)
+        images = list(pool.map(decode_image, blobs)) if pool is not None and len(blobs) > 1 \
+            else [decode_image(b) for b in blobs]
         now = time.time()
-        frames = [pipeline.analyze(img, now + i * 1e-3, i) for i, img in enumerate(images)]
+        frames = pipeline.analyze_many(images, now) if hasattr(pipeline, "analyze_many") \
+            else [pipeline.analyze(img, now + i * 1e-3, i) for i, img in enumerate(images)]
         replayed = None
         guard = pipeline.replay_guard
         hashes = [f.frame_hash for f in frames if f.frame_hash]

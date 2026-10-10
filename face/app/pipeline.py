@@ -12,7 +12,9 @@ from __future__ import annotations
 import copy
 import importlib
 import logging
+import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 
@@ -70,7 +72,6 @@ class Pipeline:
         self.threshold = (settings.match_threshold if settings.match_threshold is not None
                           else self.faces.default_threshold)
         rec_name = getattr(self.faces, "rec_name", self.faces.kind)
-        import os
         env_copy = os.environ.get("FACE_REFERENCE_COPY_SIM", "").strip()
         self.reference_copy_sim = float(env_copy) if env_copy else REFERENCE_COPY_SIM.get(rec_name, 0.935)
 
@@ -98,6 +99,13 @@ class Pipeline:
                     self.replay_guard = self.replay.ReplayGuard()
                 except Exception as exc:
                     log.error("ReplayGuard не создан: %s: %s", type(exc).__name__, exc)
+        # Кадры одного запроса (verify/frames) анализируются параллельно: сессии onnxruntime
+        # под своими замками, поэтому кадр A в детекторе людей идёт одновременно с кадром B в детекторе лиц,
+        # а подготовка (resize, выравнивание) — на других ядрах. Результат по кадру тот же, что по очереди.
+        # FACE_FRAME_WORKERS=1 — по очереди, как раньше.
+        workers = max(1, int(os.environ.get("FACE_FRAME_WORKERS", "4") or 4))
+        self.frame_pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="face-frame") \
+            if workers > 1 else None
         self.decision_config = decision.DecisionConfig(
             model_version=self.model_version,
             embedding_dim=self.embedding_dim,
@@ -190,6 +198,12 @@ class Pipeline:
         return FrameAnalysis(ts=float(ts), index=int(index), width=int(w), height=int(h), people=people,
                              people_count=int(people_count), faces=faces, best=best, status=status,
                              embedding=embedding, frame_hash=frame_hash, timing_ms=timing)
+
+    def analyze_many(self, images: list[np.ndarray], ts0: float) -> list[FrameAnalysis]:
+        """analyze() для кадров одного запроса (ts = ts0 + i мс), параллельно в frame_pool; порядок сохраняется."""
+        if self.frame_pool is None or len(images) < 2:
+            return [self.analyze(img, ts0 + i * 1e-3, i) for i, img in enumerate(images)]
+        return list(self.frame_pool.map(lambda a: self.analyze(a[1], ts0 + a[0] * 1e-3, a[0]), enumerate(images)))
 
     # ------------------------------------------------------------------ эталон
     def check_reference(self, img_rgb: np.ndarray) -> tuple[Reason, FrameAnalysis]:
