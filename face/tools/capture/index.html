@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Камера для модуля лиц</title>
+<style>
+  :root { color-scheme: light dark; --bg: #fff; --fg: #111; --mut: #666; --acc: #0a6cff; --bad: #c62828; --rec: #d32f2f; --box: #f2f2f4; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #111; --fg: #eee; --mut: #999; --box: #222; } }
+  body { margin: 0; padding: 12px 16px 40px; font: 15px/1.35 -apple-system, system-ui, sans-serif; background: var(--bg); color: var(--fg); }
+  h1 { font-size: 17px; margin: 0 0 6px; }
+  h2 { font-size: 14px; margin: 14px 0 4px; color: var(--mut); text-transform: uppercase; letter-spacing: .03em; }
+  video { width: 100%; max-height: 50vh; background: #000; border-radius: 8px; object-fit: contain; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0; align-items: center; }
+  select, input[type=text], button { font: inherit; padding: 8px 10px; border-radius: 8px; border: 1px solid #8884; background: var(--box); color: var(--fg); }
+  input[type=text] { flex: 1; min-width: 0; }
+  button.main { background: var(--acc); color: #fff; border: 0; font-weight: 600; flex: 1; padding: 12px; }
+  button.rec { background: var(--rec); color: #fff; border: 0; font-weight: 600; flex: 1; padding: 12px; }
+  button.del { color: var(--bad); }
+  label.tag { display: inline-flex; gap: 4px; align-items: center; padding: 4px 8px; background: var(--box); border-radius: 6px; font-size: 13px; }
+  pre { background: var(--box); padding: 8px; border-radius: 8px; font-size: 11px; white-space: pre-wrap; word-break: break-all; max-height: 28vh; overflow: auto; }
+  .stats { font: 13px/1.4 ui-monospace, Menlo, monospace; background: var(--box); padding: 8px; border-radius: 8px; }
+  .mut { color: var(--mut); font-size: 13px; }
+  .err { color: var(--bad); }
+</style>
+</head>
+<body>
+<h1>Камера для модуля распознавания лиц</h1>
+<p class="mut">Только тестовые данные, с согласия людей. Всё сохраняется на сервере в ~/face-data/.</p>
+
+<div class="row">
+  <select id="device"><option value="">Задняя камера (environment)</option><option value="user">Фронтальная (user)</option></select>
+  <select id="res">
+    <option value="1280x720">1280×720 (как во фронте)</option>
+    <option value="1920x1080">1920×1080</option>
+    <option value="3840x2160">3840×2160</option>
+  </select>
+  <button id="start">Включить камеру</button>
+</div>
+<video id="video" playsinline muted autoplay></video>
+<div class="row" id="zoomRow" hidden><span class="mut">Зум</span><input id="zoom" type="range" step="0.1" style="flex:1"><span id="zoomVal" class="mut"></span></div>
+<div class="mut" id="live"></div>
+
+<h2>Что снимаем</h2>
+<div class="row"><input id="subject" type="text" placeholder="Код человека, например p1 (не имя)" autocapitalize="off" autocomplete="off"></div>
+<div class="row">
+  <select id="preset" style="flex:1">
+    <option value="gate" selected>Живой человек подходит к проходной</option>
+    <option value="reference">Эталон (портрет для регистрации, снимком)</option>
+    <option value="gate_borderline">Пограничный кадр</option>
+    <option value="gate_unusable">Непригодный: профиль, спина, темно, свет сзади</option>
+    <option value="screen_photo">Подмена: фото на экране телефона</option>
+    <option value="screen_video">Подмена: видео на экране телефона</option>
+    <option value="print">Подмена: распечатка</option>
+    <option value="two_people">Двое в кадре</option>
+    <option value="no_person">Без человека</option>
+  </select>
+</div>
+<div class="row" id="tags"></div>
+<div class="row"><input id="note" type="text" placeholder="Заметка (необязательно)"></div>
+
+<h2>Поток кадров (как будет на проходной)</h2>
+<div class="row">
+  <label class="tag">к/с <select id="fps"><option>3</option><option selected>4</option><option>5</option><option>10</option></select></label>
+  <label class="tag">JPEG <select id="q"><option>0.88</option><option>0.8</option><option>0.95</option></select></label>
+  <label class="tag"><input type="checkbox" id="save"> сохранять кадры как ролик</label>
+</div>
+<div class="row"><button class="main" id="stream">Начать поток</button></div>
+<div class="stats" id="stats">—</div>
+
+<h2>Ролик</h2>
+<div class="row"><button class="rec" id="record">● Записать ролик</button></div>
+
+<h2>Снимок / файл (запасной вариант)</h2>
+<div class="row">
+  <button id="shot">Снимок</button>
+  <button id="pick">Файл / камера iOS</button>
+  <input id="file" type="file" accept="image/*,video/*" hidden>
+  <button class="del" id="undo">Удалить последнее</button>
+</div>
+
+<div id="status" class="mut"></div>
+<pre id="log"></pre>
+<details><summary class="mut">Параметры камеры</summary><pre id="settings"></pre></details>
+
+<script>
+const $ = id => document.getElementById(id);
+const base = location.pathname.endsWith('/') ? location.pathname : location.pathname + '/';
+const TAGS = ['helmet','hat','hood','glasses','profile','back','dark','backlight','blur','still','turn_head','occluded','borderline'];
+let stream = null, track = null, last = null, requested = null, offset = 0;
+
+$('tags').innerHTML = TAGS.map(t => `<label class="tag"><input type="checkbox" value="${t}">${t}</label>`).join('');
+try { $('subject').value = localStorage.getItem('subject') || ''; } catch {}
+$('subject').onchange = () => { try { localStorage.setItem('subject', $('subject').value); } catch {} };
+
+function log(s, cls) { $('log').textContent = s + '\n' + $('log').textContent; $('status').className = cls || 'mut'; $('status').textContent = s; }
+const pct = (a, p) => { if (!a.length) return NaN; const s = [...a].sort((x, y) => x - y); return s[Math.min(s.length - 1, Math.round(p / 100 * (s.length - 1)))]; };
+
+async function listDevices() {
+  const devs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
+  const sel = $('device'), cur = sel.value;
+  sel.innerHTML = '<option value="">Задняя камера (environment)</option><option value="user">Фронтальная (user)</option>' +
+    devs.map((d, i) => `<option value="id:${d.deviceId}">${d.label || 'Камера ' + (i + 1)}</option>`).join('');
+  sel.value = cur;
+}
+
+async function syncClock() {  // сдвиг часов клиента относительно сервера по минимальному RTT
+  let best = null;
+  for (let i = 0; i < 5; i++) {
+    const t0 = Date.now(); const r = await (await fetch(base + 'time')).json(); const t1 = Date.now();
+    if (!best || t1 - t0 < best.rtt) best = { rtt: t1 - t0, off: r.t - (t0 + t1) / 2 };
+  }
+  offset = best.off;
+  return best;
+}
+
+async function start() {
+  if (!navigator.mediaDevices?.getUserMedia) { log('Камера недоступна: нужен HTTPS и Safari.', 'err'); return; }
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  const [w, h] = $('res').value.split('x').map(Number);
+  const dev = $('device').value;
+  const video = { width: { ideal: w }, height: { ideal: h } };
+  if (dev.startsWith('id:')) video.deviceId = { exact: dev.slice(3) };
+  else video.facingMode = dev === 'user' ? 'user' : 'environment';
+  requested = video;
+  try { stream = await navigator.mediaDevices.getUserMedia({ video, audio: false }); }
+  catch (e) { log('Ошибка камеры: ' + e.name + ' ' + e.message, 'err'); return; }
+  track = stream.getVideoTracks()[0];
+  $('video').srcObject = stream;
+  await $('video').play().catch(() => {});
+  await listDevices();
+  const caps = track.getCapabilities ? track.getCapabilities() : {};
+  if (caps.zoom) {
+    $('zoomRow').hidden = false;
+    Object.assign($('zoom'), { min: caps.zoom.min, max: caps.zoom.max, step: caps.zoom.step || 0.1, value: track.getSettings().zoom || caps.zoom.min });
+  } else $('zoomRow').hidden = true;
+  showSettings();
+}
+
+function camMeta() {
+  const v = $('video');
+  return { label: track?.label, requested, settings: track?.getSettings(), video: [v.videoWidth, v.videoHeight],
+    orientation: screen.orientation?.type, dpr: devicePixelRatio };
+}
+function showSettings() {
+  if (!track) return;
+  const v = $('video');
+  $('live').textContent = `${track.label} · поток ${v.videoWidth}×${v.videoHeight}`;
+  $('settings').textContent = JSON.stringify({ ...camMeta(), capabilities: track.getCapabilities ? track.getCapabilities() : null, ua: navigator.userAgent }, null, 1);
+}
+$('video').addEventListener('resize', showSettings);
+$('zoom').oninput = async () => {
+  $('zoomVal').textContent = $('zoom').value + '×';
+  try { await track.applyConstraints({ advanced: [{ zoom: Number($('zoom').value) }] }); } catch (e) { log('Зум: ' + e.message, 'err'); }
+};
+
+function labelParams(source, needSubject = true) {
+  const subject = $('subject').value.trim();
+  if (needSubject && !subject) throw new Error('Укажи код человека (p1, p2…)');
+  const tags = [...$('tags').querySelectorAll('input:checked')].map(i => i.value).join(';');
+  return new URLSearchParams({ subject, preset: $('preset').value, tags, note: $('note').value, source });
+}
+
+function grab(q) {  // кадр видео -> JPEG
+  const v = $('video'), c = document.createElement('canvas');
+  c.width = v.videoWidth; c.height = v.videoHeight;
+  c.getContext('2d').drawImage(v, 0, 0);
+  return new Promise(res => c.toBlob(res, 'image/jpeg', q));
+}
+
+// ---------- поток кадров ----------
+let streaming = false;
+async function runStream() {
+  if (!track) { log('Сначала включи камеру', 'err'); return; }
+  if (streaming) { streaming = false; return; }
+  const save = $('save').checked;
+  const params = labelParams('stream', save);
+  const clock = await syncClock();
+  const session = (save ? $('subject').value.trim().replace(/[^A-Za-z0-9_-]/g, '') + '_' + $('preset').value + '_' : 'probe_') +
+    new Date().toISOString().replace(/[-:T.Z]/g, '').slice(0, 14);
+  const fps = Number($('fps').value), q = Number($('q').value), period = 1000 / fps, MAX_INFLIGHT = 2;
+  const st = { sent: 0, ok: 0, dropped: 0, err: 0, rtt: [], enc: [], kb: [], acks: [] };
+  let inflight = 0, seq = 0;
+  streaming = true; $('stream').textContent = 'Остановить поток';
+  const t0 = performance.now();
+  const timer = setInterval(async () => {
+    if (!streaming) return;
+    if (inflight >= MAX_INFLIGHT) { st.dropped++; return; }  // сеть не успевает — кадр пропускаем
+    inflight++;
+    try {
+      const te = performance.now();
+      const blob = await grab(q);
+      st.enc.push(performance.now() - te); st.kb.push(blob.size / 1024);
+      const p = new URLSearchParams(params); p.set('session', session); p.set('seq', ++seq); p.set('t_cap', Date.now() + offset); p.set('save', save ? '1' : '0');
+      const ts = performance.now(); st.sent++;
+      const r = await fetch(base + 'frame?' + p, { method: 'POST', body: blob, headers: { 'Content-Type': 'image/jpeg' } });
+      if (!r.ok) throw new Error((await r.json()).error);
+      st.rtt.push(performance.now() - ts); st.ok++; st.acks.push(performance.now());
+    } catch (e) { st.err++; log('Кадр: ' + e.message, 'err'); }
+    finally { inflight--; }
+  }, period);
+  const show = setInterval(() => {
+    const now = performance.now(), recent = st.acks.filter(t => now - t < 5000).length / 5;
+    $('stats').innerHTML = `сессия ${session}${save ? ' (сохраняется)' : ''}<br>` +
+      `отправлено ${st.sent} · дошло ${st.ok} · пропущено ${st.dropped} · ошибок ${st.err}<br>` +
+      `к/с дошло (5 с): ${recent.toFixed(1)} из ${fps} · ${((now - t0) / 1000).toFixed(0)} с<br>` +
+      `кадр ${$('video').videoWidth}×${$('video').videoHeight}, ${pct(st.kb, 50).toFixed(0)} КБ · кодирование ${pct(st.enc, 50).toFixed(0)} мс<br>` +
+      `RTT p50 ${pct(st.rtt, 50).toFixed(0)} / p95 ${pct(st.rtt, 95).toFixed(0)} мс · часы ±${(clock.rtt / 2).toFixed(0)} мс`;
+  }, 500);
+  while (streaming) await new Promise(r => setTimeout(r, 200));
+  clearInterval(timer); clearInterval(show);
+  while (inflight > 0) await new Promise(r => setTimeout(r, 100));
+  $('stream').textContent = 'Начать поток';
+  const summary = { session, fps_target: fps, quality: q, sent: st.sent, ok: st.ok, dropped: st.dropped, err: st.err,
+    rtt_p50: pct(st.rtt, 50), rtt_p95: pct(st.rtt, 95), enc_p50: pct(st.enc, 50), kb_p50: pct(st.kb, 50),
+    clock_rtt: clock.rtt, seconds: (performance.now() - t0) / 1000, cam: camMeta() };
+  const s = await (await fetch(base + 'stream_end', { method: 'POST', body: JSON.stringify(summary) })).json();
+  if (save) last = 'sessions/' + session;
+  log(`Поток ${session}: на сервер дошло ${s.frames} кадров за ${s.seconds} с = ${s.fps_delivered} к/с; ` +
+      `${s.kb_avg} КБ; задержка съёмка→сервер p50 ${s.latency_ms_p50} / p95 ${s.latency_ms_p95} мс; кадр ${s.frame_wh}`);
+}
+
+// ---------- ролик ----------
+let recorder = null;
+async function toggleRecord() {
+  if (!track) { log('Сначала включи камеру', 'err'); return; }
+  if (recorder) { recorder.stop(); return; }
+  const params = labelParams('rec');
+  const type = ['video/mp4', 'video/webm'].find(t => window.MediaRecorder && MediaRecorder.isTypeSupported(t));
+  if (!type) { log('MediaRecorder не поддерживается — снимите ролик камерой iOS и загрузите файлом', 'err'); return; }
+  const chunks = [], t0 = performance.now();
+  recorder = new MediaRecorder(stream, { mimeType: type });
+  recorder.ondataavailable = e => e.data.size && chunks.push(e.data);
+  recorder.onstop = async () => {
+    recorder = null; $('record').textContent = '● Записать ролик';
+    const blob = new Blob(chunks, { type });
+    await guarded(() => upload('clip', blob, params, { source: 'rec', mime: type, seconds: (performance.now() - t0) / 1000, cam: camMeta() }));
+  };
+  recorder.start();
+  $('record').textContent = '■ Остановить запись';
+  setTimeout(() => recorder && recorder.state === 'recording' && recorder.stop(), 20000);  // не длиннее 20 с
+}
+
+// ---------- снимок / файл ----------
+async function upload(route, blob, params, meta) {
+  const t0 = performance.now();
+  const r = await fetch(base + route + '?' + params, { method: 'POST', body: blob,
+    headers: { 'Content-Type': blob.type || 'application/octet-stream', 'X-Capture-Meta': encodeURIComponent(JSON.stringify(meta)) } });
+  const rtt = performance.now() - t0;
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || r.status);
+  last = j.file;
+  fetch(base + 'rtt', { method: 'POST', body: JSON.stringify({ file: j.file, rtt_ms: Math.round(rtt) }) });
+  log(`✓ ${j.file} · ${j.jpeg_wh ? j.jpeg_wh.join('×') + ' · ' : ''}${(j.bytes / 1024).toFixed(0)} КБ · загрузка ${rtt.toFixed(0)} мс`);
+}
+
+async function shot() {
+  if (!track) { log('Сначала включи камеру', 'err'); return; }
+  const q = Number($('q').value), te = performance.now();
+  const blob = await grab(q);
+  await upload('upload', blob, labelParams('video'), { source: 'video', quality: q, encode_ms: Math.round(performance.now() - te), cam: camMeta(), ts: Date.now() });
+}
+
+async function guarded(fn) { try { await fn(); } catch (e) { log('Ошибка: ' + e.message, 'err'); } }
+
+$('start').onclick = () => guarded(start);
+$('res').onchange = $('device').onchange = () => track && guarded(start);
+$('stream').onclick = () => guarded(runStream);
+$('record').onclick = () => guarded(toggleRecord);
+$('shot').onclick = () => guarded(shot);
+$('pick').onclick = () => $('file').click();
+$('file').onchange = () => guarded(async () => {
+  const f = $('file').files[0]; if (!f) return;
+  const route = f.type.startsWith('video/') ? 'clip' : 'upload';
+  await upload(route, f, labelParams('file'), { source: 'file', type: f.type, size: f.size, ext: f.name.split('.').pop() });
+  $('file').value = '';
+});
+$('undo').onclick = () => guarded(async () => {
+  if (!last) { log('Нечего удалять', 'err'); return; }
+  const r = await fetch(base + 'delete', { method: 'POST', body: JSON.stringify({ file: last }) });
+  if (r.ok) { log('Удалено: ' + last); last = null; }
+});
+</script>
+</body>
+</html>
