@@ -55,7 +55,9 @@ services:
     <<: *hardened
     # start-dev выполняет Quarkus augmentation в каталоге установки.
     read_only: false
-    image: quay.io/keycloak/keycloak:26.5.7
+    image: ${KEYCLOAK_IMAGE:-prohodnaya-keycloak}:${KEYCLOAK_TAG:-local}
+    build:
+      context: ./keycloak
     command: ["start-dev", "--import-realm"]
     user: "1000:0"
     environment:
@@ -73,8 +75,6 @@ services:
       PANEL_ORIGIN: ${PANEL_ORIGIN:-http://localhost:8080}
     volumes:
       - keycloak_data:/opt/keycloak/data
-      - ./keycloak/import:/opt/keycloak/data/import:ro
-      - ./keycloak/scripts:/opt/keycloak/project-scripts:ro
     tmpfs:
       - /tmp:size=64m,uid=1000,gid=0,mode=0700,nosuid,nodev
     ports:
