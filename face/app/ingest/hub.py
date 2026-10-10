@@ -37,6 +37,8 @@ log = logging.getLogger("face.ingest")
 
 Analyze = Callable[..., FrameAnalysis]  # analyze(img_rgb, ts, index) -> FrameAnalysis
 
+ANALYZE_QUEUE = 4  # кадров в очереди на анализ на камеру
+ANALYZE_MAX_LAG_S = 0.15  # кадры старше свежайшего в очереди на столько — выбрасываем
 _FPS_WINDOW_S = 5.0
 _PREVIEW_IDLE_S = 3.0  # нет запросов предпросмотра столько секунд → не готовить кадры и сбросить последний
 _PREVIEW_MAX_SHARE = 0.4  # предпросмотр занимает не больше этой доли времени потока чтения
@@ -192,7 +194,11 @@ class _Camera:
     analyze_ms: float | None = None  # скользящее среднее
     next_sample: float = 0.0  # time.time() следующего кадра на анализ
     index: int = 0  # сквозной номер кадра источника (не сбрасывается при переподключении)
-    slot: tuple | None = None  # (frame_bgr, ts, index) — очередь на 1 кадр
+    slot: deque = field(default_factory=lambda: deque(maxlen=ANALYZE_QUEUE))  # (frame_bgr, ts, index): кадры
+    # приходят пачками (RTMP→RTSP), очередь на несколько кадров не теряет пачку; полная — выпадает старший
+    rate_n: int = 0  # кадров с начала окна оценки темпа входа (для выбора каждого k-го кадра)
+    rate_t0: float = 0.0
+    fps_est: float = 0.0  # оценка темпа входа, к/с
     slot_cond: threading.Condition = field(default_factory=threading.Condition)
     subscribers: list = field(default_factory=list)
     threads: list = field(default_factory=list)
@@ -275,7 +281,7 @@ class CameraHub:
         self._stop.set()
         for cam in self._cams.values():
             with cam.slot_cond:
-                cam.slot = None
+                cam.slot.clear()
                 cam.slot_cond.notify_all()
             with cam.cond:
                 cam.cond.notify_all()
@@ -610,18 +616,31 @@ class CameraHub:
                 index = cam.index
                 cam.last_frame_mono = mono
                 cam.arrivals.append(mono)
-            if cam.next_sample == 0.0 or ts < cam.next_sample - 5 * period:  # старт или часы ушли назад
-                cam.next_sample = ts
+            # Темп входа по числу кадров (не по времени прихода: живой поток приходит пачками).
+            if cam.rate_t0 == 0.0:
+                cam.rate_t0, cam.rate_n = mono, 0
+            cam.rate_n += 1
+            if mono - cam.rate_t0 >= 2.0:
+                cam.fps_est = cam.rate_n / (mono - cam.rate_t0)
+                cam.rate_t0, cam.rate_n = mono, 0
+            if cam.fps_est > 0:  # каждый k-й кадр потока: равномерно по времени съёмки, а не прихода
+                k = max(1, round(cam.fps_est * period))
+                due = index % k == 0
+            else:  # первые 2 с — по часам сервера
+                if cam.next_sample == 0.0 or ts < cam.next_sample - 5 * period:  # старт или часы ушли назад
+                    cam.next_sample = ts
+                due = ts >= cam.next_sample
+                if due:
+                    cam.next_sample = max(cam.next_sample + period, ts + period / 2)
             frame = None
-            if ts >= cam.next_sample:  # кадр на анализ — первым, предпросмотр его не задерживает
-                cam.next_sample = max(cam.next_sample + period, ts + period / 2)
+            if due:  # кадр на анализ — первым, предпросмотр его не задерживает
                 ok, frame = cap.retrieve()
                 if not ok or frame is None:
                     continue
                 with cam.slot_cond:
-                    if cam.slot is not None:
-                        cam.dropped += 1
-                    cam.slot = (frame, ts, index)
+                    if len(cam.slot) == cam.slot.maxlen:
+                        cam.dropped += 1  # анализ не успевает — выпадает самый старый кадр очереди
+                    cam.slot.append((frame, ts, index))
                     cam.slot_cond.notify()
             if not self._preview_due(cam, mono):
                 continue
@@ -642,12 +661,16 @@ class CameraHub:
         enc = [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality]
         while True:
             with cam.slot_cond:
-                while cam.slot is None and not self._stop.is_set():
+                while not cam.slot and not self._stop.is_set():
                     cam.slot_cond.wait(0.5)
                 if self._stop.is_set():
                     return
-                frame, ts, index = cam.slot
-                cam.slot = None
+                # Пачку (кадры пришли почти одновременно) разбираем целиком, но при перегрузке не копим
+                # отставание: кадры старше свежайшего в очереди больше чем на ANALYZE_MAX_LAG_S выбрасываем.
+                while len(cam.slot) > 1 and cam.slot[-1][1] - cam.slot[0][1] > ANALYZE_MAX_LAG_S:
+                    cam.slot.popleft()
+                    cam.dropped += 1
+                frame, ts, index = cam.slot.popleft()
             try:
                 rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 t = time.perf_counter()
