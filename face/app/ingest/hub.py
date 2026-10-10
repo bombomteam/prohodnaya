@@ -7,6 +7,13 @@
 - **анализ** — `analyze(img_rgb, ts, index)` из ядра, затем JPEG кадра (качество `jpeg_quality`)
   и запись в кольцевой буфер на `buffer_seconds`. Всё только в памяти.
 
+Канал предпросмотра (живое видео консоли, `preview_fps`, по умолчанию FACE_PREVIEW_FPS=30, 0 — выключен):
+поток чтения после выбора кадра на анализ делает `retrieve()` кадров с темпом до `preview_fps`, уменьшает
+до `preview_max_side` и хранит только ПОСЛЕДНИЙ кадр (без истории, без диска). Работает только пока
+кто-то спрашивает `preview()`/`apreview()` (иначе через `_PREVIEW_IDLE_S` кадр сбрасывается и CPU не тратится).
+Если подготовка кадра предпросмотра дорогая или чтение файла отстаёт — кадры предпросмотра пропускаются,
+выбор кадров на анализ не меняется.
+
 Обрыв или конец файла → камера офлайн, переподключение с паузой (растёт до `reconnect_max_s`).
 """
 from __future__ import annotations
@@ -14,11 +21,12 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import os
 import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Callable, Iterator
+from typing import Callable, Iterator, NamedTuple
 
 import numpy as np
 
@@ -30,6 +38,8 @@ log = logging.getLogger("face.ingest")
 Analyze = Callable[..., FrameAnalysis]  # analyze(img_rgb, ts, index) -> FrameAnalysis
 
 _FPS_WINDOW_S = 5.0
+_PREVIEW_IDLE_S = 3.0  # нет запросов предпросмотра столько секунд → не готовить кадры и сбросить последний
+_PREVIEW_MAX_SHARE = 0.4  # предпросмотр занимает не больше этой доли времени потока чтения
 _REDUCE_FLAGS = {1: cv2.IMREAD_COLOR, 2: cv2.IMREAD_REDUCED_COLOR_2,
                  4: cv2.IMREAD_REDUCED_COLOR_4, 8: cv2.IMREAD_REDUCED_COLOR_8}
 
@@ -43,6 +53,13 @@ class LiveFrame:
     @property
     def ts(self) -> float:
         return self.analysis.ts
+
+
+class PreviewFrame(NamedTuple):
+    """Кадр канала предпросмотра: номер (растёт), BGR uint8 только для чтения, время прихода (time.time())."""
+    seq: int
+    bgr: np.ndarray
+    ts: float
 
 
 class Subscription:
@@ -179,6 +196,18 @@ class _Camera:
     slot_cond: threading.Condition = field(default_factory=threading.Condition)
     subscribers: list = field(default_factory=list)
     threads: list = field(default_factory=list)
+    # Канал предпросмотра: только последний кадр.
+    pv_cond: threading.Condition = field(default_factory=threading.Condition)
+    pv_frame: np.ndarray | None = None
+    pv_ts: float = 0.0
+    pv_mono: float = 0.0
+    pv_seq: int = 0
+    pv_next: float = 0.0  # monotonic следующего кадра предпросмотра
+    pv_cost: float | None = None  # скользящее среднее цены кадра предпросмотра, с
+    pv_wanted_until: float = 0.0  # monotonic: до этого момента кто-то смотрит предпросмотр
+    pv_at: deque = field(default_factory=lambda: deque(maxlen=1024))
+    pv_skipped: int = 0
+    pv_waiters: list = field(default_factory=list)  # [(loop, asyncio.Event)] ждущих apreview
 
 
 class CameraHub:
@@ -192,9 +221,16 @@ class CameraHub:
                  buffer_seconds: float = 20.0, *, jpeg_quality: int = 80,
                  reconnect_delay_s: float = 1.0, reconnect_max_s: float = 3.0,
                  stale_after_s: float = 2.0, open_timeout_ms: int = 8000,
-                 read_timeout_ms: int = 5000, decode_threads: int = 2):
+                 read_timeout_ms: int = 5000, decode_threads: int = 2,
+                 preview_fps: float | None = None, preview_max_side: int | None = None):
         if analyze_fps <= 0 or buffer_seconds <= 0:
             raise ValueError("analyze_fps и buffer_seconds должны быть > 0")
+        if preview_fps is None:
+            preview_fps = _env_number("FACE_PREVIEW_FPS", 30.0)
+        if preview_max_side is None:
+            preview_max_side = int(_env_number("FACE_PREVIEW_MAX_SIDE", 1280))
+        self.preview_fps = max(0.0, min(float(preview_fps), 60.0))
+        self.preview_max_side = max(160, int(preview_max_side))
         self.analyze_fps = float(analyze_fps)
         self.buffer_seconds = float(buffer_seconds)
         self.jpeg_quality = int(jpeg_quality)
@@ -245,11 +281,13 @@ class CameraHub:
                 cam.cond.notify_all()
             for sub in list(cam.subscribers):
                 sub.close()
+            self._clear_preview(cam)
         deadline = time.monotonic() + timeout
         for cam in self._cams.values():
             for t in cam.threads:
                 t.join(max(0.0, deadline - time.monotonic()))
             cam.threads = []
+            self._clear_preview(cam)  # поток чтения мог успеть положить кадр после первой очистки
             with cam.cond:
                 cam.buffer.clear()
                 cam.connected = False
@@ -267,6 +305,16 @@ class CameraHub:
     @property
     def camera_ids(self) -> list[str]:
         return list(self._cams)
+
+    @property
+    def running(self) -> bool:
+        """Хаб запущен и не остановлен."""
+        return self._started and not self._stop.is_set()
+
+    @property
+    def preview_enabled(self) -> bool:
+        """Канал предпросмотра включён (`preview_fps > 0`)."""
+        return self.preview_fps > 0
 
     def online(self, camera_id: str) -> bool:
         cam = self._cam(camera_id)
@@ -320,6 +368,56 @@ class CameraHub:
         with cam.cond:
             return cam.buffer[-1] if cam.buffer else None
 
+    def preview(self, camera_id: str, after_seq: int | None = None,
+                timeout: float = 1.0) -> PreviewFrame | None:
+        """Кадр предпросмотра (живое видео до `preview_fps`, без анализа). Блокирует до `timeout` секунд.
+
+        `after_seq=None` — текущий кадр, если он свежий (не старше `stale_after_s`), иначе ждать новый;
+        `after_seq=N` — ждать кадр с `seq > N` (так читатель получает каждый новый кадр, а отставший — последний).
+        None — истёк timeout, предпросмотр выключен или хаб остановлен. Каждый вызов продлевает работу
+        канала на `_PREVIEW_IDLE_S`. `bgr` только для чтения, рисовать — на копии. Неизвестная камера — KeyError.
+        """
+        cam = self._cam(camera_id)
+        if not self.preview_enabled:
+            return None
+        deadline = time.monotonic() + max(0.0, timeout)
+        with cam.pv_cond:
+            while True:
+                now = time.monotonic()
+                cam.pv_wanted_until = now + _PREVIEW_IDLE_S
+                pf = self._pv_pick(cam, after_seq, now)
+                if pf is not None or self._stop.is_set() or now >= deadline:
+                    return pf
+                cam.pv_cond.wait(min(deadline - now, 0.5))
+
+    async def apreview(self, camera_id: str, after_seq: int | None = None,
+                       timeout: float = 1.0) -> PreviewFrame | None:
+        """То же, что `preview`, для asyncio: ждёт без потоков и не блокирует цикл событий."""
+        cam = self._cam(camera_id)
+        if not self.preview_enabled:
+            return None
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + max(0.0, timeout)
+        while True:
+            with cam.pv_cond:
+                cam.pv_wanted_until = time.monotonic() + _PREVIEW_IDLE_S
+                pf = self._pv_pick(cam, after_seq, time.monotonic())
+                if pf is not None or self._stop.is_set():
+                    return pf
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    return None
+                waiter = (loop, asyncio.Event())
+                cam.pv_waiters.append(waiter)
+            try:
+                await asyncio.wait_for(waiter[1].wait(), min(remaining, 0.5))
+            except asyncio.TimeoutError:
+                pass
+            finally:
+                with cam.pv_cond:
+                    if waiter in cam.pv_waiters:
+                        cam.pv_waiters.remove(waiter)
+
     def subscribe(self, camera_id: str, maxsize: int = 2) -> Subscription:
         """Подписка на новые проанализированные кадры (см. `Subscription`). Неизвестная камера — KeyError."""
         cam = self._cam(camera_id)
@@ -339,12 +437,17 @@ class CameraHub:
                 span = min(_FPS_WINDOW_S, now - cam.connected_since) if cam.connected else 0.0
                 fps_in = _rate(cam.arrivals, now, span) if online else 0.0
                 fps_an = _rate(cam.analyzed_at, now, span) if online else 0.0
+            with cam.pv_cond:
+                fps_pv = _rate(cam.pv_at, now, min(span, now - cam.pv_at[0])) if (online and cam.pv_at) else 0.0
+            with cam.cond:
                 out.append({
                     "camera_id": cam.camera_id,
                     "online": online,
                     "last_frame_age_ms": age,
                     "fps_in": round(fps_in, 1),
                     "fps_analyzed": round(fps_an, 1),
+                    "fps_preview": round(fps_pv, 1),
+                    "preview_skipped": cam.pv_skipped,
                     "frames_dropped": cam.dropped,
                     "analyze_errors": cam.errors,
                     "reconnects": cam.reconnects,
@@ -364,6 +467,60 @@ class CameraHub:
     def _is_online(self, cam: _Camera, now: float) -> bool:
         return (cam.connected and cam.last_frame_mono is not None
                 and now - cam.last_frame_mono <= self.stale_after_s)
+
+    def _pv_pick(self, cam: _Camera, after_seq: int | None, now: float) -> PreviewFrame | None:
+        """Под cam.pv_cond: подходящий кадр предпросмотра или None."""
+        if cam.pv_frame is None:
+            return None
+        if after_seq is None:
+            if now - cam.pv_mono > self.stale_after_s:
+                return None
+        elif cam.pv_seq <= after_seq:
+            return None
+        return PreviewFrame(cam.pv_seq, cam.pv_frame, cam.pv_ts)
+
+    def _clear_preview(self, cam: _Camera) -> None:
+        with cam.pv_cond:
+            cam.pv_frame = None
+            cam.pv_at.clear()
+            waiters, cam.pv_waiters = cam.pv_waiters, []
+            cam.pv_cond.notify_all()
+        _wake_all(waiters)
+
+    def _preview_due(self, cam: _Camera, mono: float) -> bool:
+        """Нужен ли кадр предпросмотра сейчас (темп, спрос, бюджет потока чтения)."""
+        if not self.preview_enabled:
+            return False
+        if mono >= cam.pv_wanted_until:  # никто не смотрит
+            if cam.pv_frame is not None:
+                self._clear_preview(cam)
+            return False
+        period = 1.0 / self.preview_fps
+        # Допуск 0,3 периода: при 30 к/с с камеры и 30 к/с предпросмотра дрожание прихода не теряет кадры.
+        return mono + 0.3 * period >= cam.pv_next
+
+    def _publish_preview(self, cam: _Camera, frame: np.ndarray, ts: float, mono: float, cost: float) -> None:
+        """Уменьшить кадр и сделать его последним кадром предпросмотра. cost — уже потрачено на retrieve, с."""
+        t = time.perf_counter()
+        h, w = frame.shape[:2]
+        k = self.preview_max_side / float(max(h, w))
+        if k < 1.0:
+            # INTER_LINEAR: для 1080p→720p в 3–4 раза дешевле INTER_AREA по CPU, на глаз разницы нет.
+            small = cv2.resize(frame, (max(1, round(w * k)), max(1, round(h * k))), interpolation=cv2.INTER_LINEAR)
+        else:
+            small = frame.view()  # тот же буфер, что у кадра на анализ: только чтение
+        small.flags.writeable = False
+        cost += time.perf_counter() - t
+        cam.pv_cost = cost if cam.pv_cost is None else 0.8 * cam.pv_cost + 0.2 * cost
+        period = 1.0 / self.preview_fps
+        cam.pv_next = max(cam.pv_next + period, mono + 0.5 * period, mono + cam.pv_cost / _PREVIEW_MAX_SHARE)
+        with cam.pv_cond:
+            cam.pv_seq += 1
+            cam.pv_frame, cam.pv_ts, cam.pv_mono = small, ts, mono
+            cam.pv_at.append(mono)
+            waiters, cam.pv_waiters = cam.pv_waiters, []
+            cam.pv_cond.notify_all()
+        _wake_all(waiters)
 
     def _unsubscribe(self, sub: Subscription) -> None:
         cam = self._cams.get(sub.camera_id)
@@ -431,8 +588,10 @@ class CameraHub:
         t0 = time.monotonic()
         n = 0
         while not self._stop.is_set():
+            late = False
             if pace is not None:  # файл: темп реального времени
                 wait = t0 + n / pace - time.monotonic()
+                late = wait < -2.0 / pace
                 if wait > 0:
                     if self._stop.wait(wait):
                         return False
@@ -453,17 +612,30 @@ class CameraHub:
                 cam.arrivals.append(mono)
             if cam.next_sample == 0.0 or ts < cam.next_sample - 5 * period:  # старт или часы ушли назад
                 cam.next_sample = ts
-            if ts < cam.next_sample:
+            frame = None
+            if ts >= cam.next_sample:  # кадр на анализ — первым, предпросмотр его не задерживает
+                cam.next_sample = max(cam.next_sample + period, ts + period / 2)
+                ok, frame = cap.retrieve()
+                if not ok or frame is None:
+                    continue
+                with cam.slot_cond:
+                    if cam.slot is not None:
+                        cam.dropped += 1
+                    cam.slot = (frame, ts, index)
+                    cam.slot_cond.notify()
+            if not self._preview_due(cam, mono):
                 continue
-            cam.next_sample = max(cam.next_sample + period, ts + period / 2)
-            ok, frame = cap.retrieve()
-            if not ok or frame is None:
+            if late:  # файл отстаёт от реального темпа — кадр предпросмотра пропускаем
+                cam.pv_skipped += 1
                 continue
-            with cam.slot_cond:
-                if cam.slot is not None:
-                    cam.dropped += 1
-                cam.slot = (frame, ts, index)
-                cam.slot_cond.notify()
+            cost = 0.0
+            if frame is None:
+                t = time.perf_counter()
+                ok, frame = cap.retrieve()
+                cost = time.perf_counter() - t
+                if not ok or frame is None:
+                    continue
+            self._publish_preview(cam, frame, ts, mono, cost)
         return False
 
     def _worker(self, cam: _Camera) -> None:
@@ -509,6 +681,25 @@ class CameraHub:
                 cam.cond.notify_all()
             for sub in subs:
                 sub._push(lf)
+
+
+def _wake_all(waiters: list) -> None:
+    for loop, ev in waiters:
+        try:
+            loop.call_soon_threadsafe(ev.set)
+        except RuntimeError:  # цикл событий уже закрыт
+            pass
+
+
+def _env_number(name: str, default: float) -> float:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        log.warning("%s=%r: не число, беру %s", name, raw, default)
+        return default
 
 
 def _rate(times: deque, now: float, span: float) -> float:

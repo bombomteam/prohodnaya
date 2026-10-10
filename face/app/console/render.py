@@ -183,6 +183,27 @@ def render_jpeg(jpeg: bytes, fa: FrameAnalysis | None, layer: str, ov: Overlay |
     return buf.tobytes() if ok else None
 
 
+def render_preview_jpeg(img_bgr: np.ndarray, fa: FrameAnalysis | None, layer: str, ov: Overlay | None = None,
+                        age_s: float | None = None, stale_s: float = 2.0, quality: int = 75) -> bytes | None:
+    """Кадр предпросмотра (BGR, уже уменьшен хабом) + рамки ПОСЛЕДНЕГО анализа → JPEG.
+
+    age_s — насколько анализ старше показанного кадра: пишется мелко внизу, чтобы было видно, что рамки
+    чуть отстают. Анализ старше stale_s — рамки не рисуются (они бы врали), только «анализ отстаёт».
+    """
+    if fa is not None and age_s is not None and age_s > stale_s:
+        out = img_bgr.copy()
+        u = _unit(out)
+        _text(out, f"Анализ отстаёт: {age_s:.1f} с", f"Analysis lag: {age_s:.1f} s", (u, u * 2), YELLOW, u)
+    else:
+        out = render(img_bgr, fa, layer, ov)
+        if fa is not None and age_s is not None:
+            u = max(12, int(_unit(out) * 0.6))
+            ms = int(round(age_s * 1000))
+            _text(out, f"анализ {ms} мс назад", f"analysis {ms} ms ago", (u // 2, out.shape[0] - u // 2), GRAY, u)
+    ok, buf = cv2.imencode(".jpg", out, [cv2.IMWRITE_JPEG_QUALITY, quality])
+    return buf.tobytes() if ok else None
+
+
 def placeholder_jpeg(text_ru: str, text_en: str, width: int = 960, height: int = 540) -> bytes:
     """Заглушка для MJPEG, когда камера офлайн или кадров нет."""
     img = np.full((height, width, 3), 40, dtype=np.uint8)

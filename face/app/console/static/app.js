@@ -86,6 +86,7 @@ async function loadCameras() {
     const parts = ["в сети"];
     if (cam.fps_in != null) parts.push("вход " + fmt(cam.fps_in, 1) + " к/с");
     if (cam.fps_analyzed != null) parts.push("анализ " + fmt(cam.fps_analyzed, 1) + " к/с");
+    if (cam.fps_preview) parts.push("показ " + fmt(cam.fps_preview, 1) + " к/с");
     if (cam.last_frame_age_ms != null) parts.push("задержка " + Math.round(cam.last_frame_age_ms) + " мс");
     pill.textContent = parts.join(" · ");
   } else {
