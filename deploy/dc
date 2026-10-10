@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# docker compose для стенда с правильными файлами и тегами текущего релиза.
+# Пример: /srv/prohodnaya/deploy/dc ps    (прод; для теста задайте STAND_DIR/STATE_DIR/PROJECT_NAME)
+set -euo pipefail
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+dc "$@"

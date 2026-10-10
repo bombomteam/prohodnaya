@@ -1,0 +1,54 @@
+# HTTPS-прокси стенда. Домены и порты — из .env сервера (deploy/compose.stand.yaml).
+# После правки этого файла пайплайн перезапускает caddy.
+{
+	# API управления Caddy выключен: в сети хоста он был бы доступен любому процессу.
+	admin off
+	skip_install_trust
+}
+
+# Проверка «жив ли» для healthcheck контейнера, только с этой машины.
+http://127.0.0.1:8099 {
+	bind 127.0.0.1
+	respond /healthz 200
+}
+
+# Приложение: фронт и API бэкенда на одном адресе (CORS не нужен).
+{$SITE_DOMAIN} {
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+	handle /api/* {
+		request_body {
+			max_size 25MB
+		}
+		reverse_proxy 127.0.0.1:{$BACKEND_PORT}
+	}
+	handle {
+		reverse_proxy 127.0.0.1:{$FRONTEND_PORT}
+	}
+}
+
+# Keycloak. Админка, master realm и служебные пути наружу закрыты:
+# администрировать через `deploy/dc exec keycloak /opt/keycloak/bin/kcadm.sh ...`.
+{$AUTH_DOMAIN} {
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+	@internal path /admin /admin/* /realms/master /realms/master/* /health /health/* /metrics /metrics/*
+	respond @internal 404
+	reverse_proxy 127.0.0.1:{$KC_PORT}
+}
+
+# Страница загрузки фото модуля face (face/tools/capture, запущена вне compose).
+{$CAPTURE_DOMAIN} {
+	request_body {
+		max_size 300MB
+	}
+	reverse_proxy 127.0.0.1:8765
+	log {
+		output discard
+	}
+}
