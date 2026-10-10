@@ -53,7 +53,7 @@ def load_settings() -> Settings:
         pass_code_request_max_skew_s=_int("PASS_CODE_REQUEST_MAX_SKEW_S", 30),
         enroll_code_ttl_min=_int("ENROLL_CODE_TTL_MIN", 60),
         face_url=(env("FACE_URL") or "http://face:8000").rstrip("/"),
-        face_timeout_s=float(env("FACE_TIMEOUT_S") or 5),
+        face_timeout_s=float(env("FACE_TIMEOUT_S") or 10),
         face_camera_id=env("FACE_CAMERA_ID") or "gate-1",
         location_interval_s=_int("LOCATION_INTERVAL_S", 30),
         location_max_age_s=_int("LOCATION_MAX_AGE_S", 180),

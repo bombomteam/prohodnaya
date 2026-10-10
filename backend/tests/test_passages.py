@@ -574,6 +574,19 @@ def test_17_module_failure_is_deny(client, db, worker, fake_verify, exc):
     assert shifts(db) == 0 and client.get("/health").status_code == 200
 
 
+def test_five_frames_reach_module_six_rejected(client, db, worker, fake_verify):
+    """5 кадров доходят до модуля; 6 -> 422 {code, message} по-русски, модуль не вызывается."""
+    pid, phone = worker
+    p = signed_session(client, phone)
+    r = face_call(client, p["session_id"], n=6)
+    assert r.status_code == 422
+    body = r.json()
+    assert body["code"] == "VALIDATION" and body["message"] and not body["message"].isascii()
+    assert fake_verify.calls == []
+    assert face_call(client, p["session_id"], n=5).json()["decision"] == "allow"
+    assert len(fake_verify.calls[0]["frames"]) == 5
+
+
 def test_frame_over_limit_is_deny_without_module(client, db, worker, fake_verify):
     p = signed_session(client, worker[1])
     big = ("frames", ("big.jpg", b"0" * (MAX_PHOTO_BYTES + 1), "image/jpeg"))

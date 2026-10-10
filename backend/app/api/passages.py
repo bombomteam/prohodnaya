@@ -42,9 +42,9 @@ def check_face(
     session_id: UUID,
     db: DbDep,
     user: ControllerDep,
-    frames: Annotated[list[UploadFile], File(min_length=1, max_length=10)],
+    frames: Annotated[list[UploadFile], File(min_length=1, max_length=5)],
 ):
-    """1–10 кадров лица (multipart, поле frames); сервер сам решает allow/deny."""
+    """1–5 кадров лица (multipart, поле frames); сервер сам решает allow/deny."""
     data, too_large = [], False
     for f in frames:
         content = f.file.read(MAX_PHOTO_BYTES + 1)  # лимит как у фото; остальные кадры после превышения не читаем

@@ -50,16 +50,16 @@ def test_openapi_has_all_paths(bypass):
     assert "/health" in spec["paths"]
 
 
-def test_face_accepts_one_to_ten_frames(client):
-    # 1–10 кадров проходят валидацию (дальше — 404, сессии нет); логика прохода — в test_passages.py
+def test_face_accepts_one_to_five_frames(client):
+    # 1–5 кадров проходят валидацию (дальше — 404, сессии нет); логика прохода — в test_passages.py
     url = f"/api/passages/{SID}/face"
 
     def frames(n):
         return [("frames", ("a.jpg", b"x", "image/jpeg"))] * n
 
     assert client.post(url).status_code == 422
-    assert client.post(url, files=frames(11)).status_code == 422
-    for n in (1, 10):
+    assert client.post(url, files=frames(6)).status_code == 422
+    for n in (1, 5):
         r = client.post(url, files=frames(n))
         assert r.status_code == 404 and r.json()["code"] == "SESSION_NOT_FOUND"
 
