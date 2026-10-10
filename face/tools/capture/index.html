@@ -25,14 +25,50 @@
 </style>
 </head>
 <body>
-<h1>Камера для модуля распознавания лиц</h1>
-<p class="mut">Только тестовые данные, с согласия людей. Всё сохраняется на сервере в ~/face-data/.</p>
+<h1>Видео для проверки распознавания лиц</h1>
+<p class="mut">Только с согласия человека. Файлы уходят на сервер команды в ~/face-data/, никуда больше.</p>
 
+<h2>1. Код человека</h2>
+<div class="row"><input id="subject" type="text" placeholder="p1, p2… (не имя)" autocapitalize="off" autocomplete="off"></div>
+
+<h2>2. Что на видео</h2>
+<div class="row">
+  <select id="preset" style="flex:1">
+    <option value="reference">Эталон — фото лица (обычное фото, смотрю прямо)</option>
+    <option value="gate" selected>Подхожу к камере / стою лицом к камере</option>
+    <option value="headwear">В каске, капюшоне или шапке</option>
+    <option value="glasses">В очках</option>
+    <option value="profile">Профиль (стою боком)</option>
+    <option value="back">Спина (стою спиной)</option>
+    <option value="backlight">Свет сзади (окно или лампа за спиной)</option>
+    <option value="screen_photo">Атака: фото лица на экране телефона</option>
+    <option value="screen_video">Атака: видео лица на экране телефона</option>
+    <option value="print">Атака: распечатка фото</option>
+    <option value="two_people">Двое рядом</option>
+    <option value="two_behind">Двое: второй за плечом</option>
+    <option value="two_back">Двое: второй стоит спиной</option>
+    <option value="no_person">Никого в кадре</option>
+  </select>
+</div>
+<div class="row"><input id="note" type="text" placeholder="Заметка, если нужно (необязательно)"></div>
+<details><summary class="mut">Дополнительные метки</summary><div class="row" id="tags"></div></details>
+
+<h2>3. Загрузить</h2>
+<div class="row">
+  <button class="main" id="pick">Выбрать видео или фото из галереи</button>
+  <input id="file" type="file" accept="image/*,video/*" multiple hidden>
+</div>
+<div class="row"><button class="del" id="undo">Удалить последнее загруженное</button></div>
+<div id="status" class="mut"></div>
+<pre id="log"></pre>
+
+<details>
+<summary class="mut">Для оператора: камера прямо в браузере (поток кадров, запись, снимок)</summary>
 <div class="row">
   <select id="device"><option value="">Задняя камера (environment)</option><option value="user">Фронтальная (user)</option></select>
   <select id="res">
-    <option value="1280x720">1280×720 (как во фронте)</option>
     <option value="1920x1080">1920×1080</option>
+    <option value="1280x720">1280×720 (как во фронте)</option>
     <option value="3840x2160">3840×2160</option>
   </select>
   <button id="start">Включить камеру</button>
@@ -40,24 +76,6 @@
 <video id="video" playsinline muted autoplay></video>
 <div class="row" id="zoomRow" hidden><span class="mut">Зум</span><input id="zoom" type="range" step="0.1" style="flex:1"><span id="zoomVal" class="mut"></span></div>
 <div class="mut" id="live"></div>
-
-<h2>Что снимаем</h2>
-<div class="row"><input id="subject" type="text" placeholder="Код человека, например p1 (не имя)" autocapitalize="off" autocomplete="off"></div>
-<div class="row">
-  <select id="preset" style="flex:1">
-    <option value="gate" selected>Живой человек подходит к проходной</option>
-    <option value="reference">Эталон (портрет для регистрации, снимком)</option>
-    <option value="gate_borderline">Пограничный кадр</option>
-    <option value="gate_unusable">Непригодный: профиль, спина, темно, свет сзади</option>
-    <option value="screen_photo">Подмена: фото на экране телефона</option>
-    <option value="screen_video">Подмена: видео на экране телефона</option>
-    <option value="print">Подмена: распечатка</option>
-    <option value="two_people">Двое в кадре</option>
-    <option value="no_person">Без человека</option>
-  </select>
-</div>
-<div class="row" id="tags"></div>
-<div class="row"><input id="note" type="text" placeholder="Заметка (необязательно)"></div>
 
 <h2>Поток кадров (как будет на проходной)</h2>
 <div class="row">
@@ -71,22 +89,15 @@
 <h2>Ролик</h2>
 <div class="row"><button class="rec" id="record">● Записать ролик</button></div>
 
-<h2>Снимок / файл (запасной вариант)</h2>
-<div class="row">
-  <button id="shot">Снимок</button>
-  <button id="pick">Файл / камера iOS</button>
-  <input id="file" type="file" accept="image/*,video/*" hidden>
-  <button class="del" id="undo">Удалить последнее</button>
-</div>
-
-<div id="status" class="mut"></div>
-<pre id="log"></pre>
+<h2>Снимок (запасной вариант)</h2>
+<div class="row"><button id="shot">Снимок</button></div>
 <details><summary class="mut">Параметры камеры</summary><pre id="settings"></pre></details>
+</details>
 
 <script>
 const $ = id => document.getElementById(id);
 const base = location.pathname.endsWith('/') ? location.pathname : location.pathname + '/';
-const TAGS = ['helmet','hat','hood','glasses','profile','back','dark','backlight','blur','still','turn_head','occluded','borderline'];
+const TAGS = ['helmet','hat','hood','glasses','dark','blur','still','turn_head','occluded','borderline'];
 let stream = null, track = null, last = null, requested = null, offset = 0;
 
 $('tags').innerHTML = TAGS.map(t => `<label class="tag"><input type="checkbox" value="${t}">${t}</label>`).join('');
@@ -270,9 +281,15 @@ $('record').onclick = () => guarded(toggleRecord);
 $('shot').onclick = () => guarded(shot);
 $('pick').onclick = () => $('file').click();
 $('file').onchange = () => guarded(async () => {
-  const f = $('file').files[0]; if (!f) return;
-  const route = f.type.startsWith('video/') ? 'clip' : 'upload';
-  await upload(route, f, labelParams('file'), { source: 'file', type: f.type, size: f.size, ext: f.name.split('.').pop() });
+  const files = [...$('file').files]; if (!files.length) return;
+  const params = labelParams('file');
+  for (let i = 0; i < files.length; i++) {
+    const f = files[i];
+    log(`Загружаю ${i + 1} из ${files.length}: ${(f.size / 1048576).toFixed(1)} МБ…`);
+    const route = f.type.startsWith('video/') ? 'clip' : 'upload';
+    await upload(route, f, params, { source: 'file', type: f.type, size: f.size, ext: f.name.split('.').pop() });
+  }
+  log(`Готово: загружено ${files.length}. Можно выбрать следующий эпизод.`);
   $('file').value = '';
 });
 $('undo').onclick = () => guarded(async () => {

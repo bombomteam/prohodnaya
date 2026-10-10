@@ -34,20 +34,27 @@ LABELS = DATA / "labels.csv"
 MAX_BYTES = 200 * 1024 * 1024
 LABEL_FIELDS = ["file", "subject", "kind", "ref_expected", "gate_expected", "tags", "note", "people"]
 
-# Пресет -> (kind для одиночного снимка, ref_expected, gate_expected, people). Формат face/eval/labels.csv.
-# Для потока с сохранением и для роликов kind=clip, ref_expected пусто.
+# Эпизод -> (kind для одиночного снимка, ref_expected, gate_expected, people, теги по умолчанию).
+# Формат face/eval/labels.csv. Для видео и потока с сохранением kind=clip, ref_expected пусто.
 PRESETS = {
-    "reference": ("reference", "accept", "", "1"),
-    "gate": ("gate", "", "match", "1"),
-    "gate_borderline": ("gate", "", "either", "1"),
-    "gate_unusable": ("gate", "", "unusable", "1"),
-    "screen_photo": ("screen", "any", "spoof", ""),
-    "screen_video": ("screen", "any", "spoof", ""),
-    "print": ("print", "any", "spoof", ""),
-    "two_people": ("multi_person", "reject", "multi_person", "2"),
-    "no_person": ("no_person", "reject", "unusable", "0"),
+    "reference": ("reference", "accept", "", "1", ""),
+    "gate": ("gate", "", "match", "1", ""),
+    "headwear": ("gate", "", "match", "1", "headwear"),
+    "glasses": ("gate", "", "match", "1", "glasses"),
+    "backlight": ("gate", "", "either", "1", "backlight"),
+    "gate_borderline": ("gate", "", "either", "1", "borderline"),
+    "profile": ("gate", "", "unusable", "1", "profile"),
+    "back": ("gate", "", "unusable", "1", "back"),
+    "gate_unusable": ("gate", "", "unusable", "1", ""),
+    "screen_photo": ("screen", "any", "spoof", "", ""),
+    "screen_video": ("screen", "any", "spoof", "", ""),
+    "print": ("print", "any", "spoof", "", ""),
+    "two_people": ("multi_person", "reject", "multi_person", "2", ""),
+    "two_behind": ("multi_person", "reject", "multi_person", "2", "behind"),
+    "two_back": ("multi_person", "reject", "multi_person", "2", "back"),
+    "no_person": ("no_person", "reject", "unusable", "0", ""),
 }
-TAGS = {"helmet", "hat", "hood", "glasses", "smile", "grimace", "hands", "profile", "back",
+TAGS = {"helmet", "hat", "hood", "headwear", "glasses", "smile", "grimace", "hands", "profile", "back", "behind",
         "dark", "backlight", "blur", "small_face", "occluded", "borderline", "wide_angle", "still", "turn_head"}
 IMAGE_EXT = {".jpg", ".png", ".webp", ".heic"}
 VIDEO_EXT = {".mp4", ".mov", ".webm"}
@@ -106,11 +113,11 @@ def label_row(file: str, q: dict, clip: bool) -> dict | None:
     preset = q.get("preset", "")
     if preset not in PRESETS:
         return None
-    kind, ref_exp, gate_exp, people = PRESETS[preset]
+    kind, ref_exp, gate_exp, people, default_tags = PRESETS[preset]
     if clip:
         kind, ref_exp = "clip", ""
         gate_exp = gate_exp or "match"
-    tags = ";".join(sorted(t for t in q.get("tags", "").split(";") if t in TAGS))
+    tags = ";".join(sorted({t for t in (q.get("tags", "") + ";" + default_tags).split(";") if t in TAGS}))
     return {"file": file, "subject": safe(q.get("subject", "")) or "unknown", "kind": kind,
             "ref_expected": ref_exp, "gate_expected": gate_exp, "tags": tags,
             "note": q.get("note", "")[:200].replace("\n", " "), "people": people}

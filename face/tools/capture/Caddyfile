@@ -1,0 +1,17 @@
+# Временный HTTPS для страницы загрузки (face/tools/capture/server.py на 127.0.0.1:8765).
+# Сертификат Let's Encrypt по TLS-ALPN на 443; порт 80 занят стендом, поэтому без редиректа.
+# Запуск: run_https.sh. Только на время сбора тестовых данных.
+{
+	http_port 8088
+	auto_https disable_redirects
+}
+
+{$CAPTURE_DOMAIN} {
+	request_body {
+		max_size 300MB
+	}
+	reverse_proxy 127.0.0.1:8765
+	log {
+		output discard
+	}
+}
