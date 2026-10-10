@@ -27,17 +27,17 @@ jobs:
       - name: Smoke test demo and API configuration
         run: |
           docker run -d --name prohodnaya-demo -p 127.0.0.1:18080:8080 ghcr.io/bombomteam/prohodnaya-frontend:latest
-          curl --retry 10 --retry-delay 1 --retry-connrefused -fsS http://127.0.0.1:18080/healthz
+          curl --retry 10 --retry-delay 1 --retry-all-errors -fsS http://127.0.0.1:18080/healthz || { docker logs prohodnaya-demo; exit 1; }
           curl -fsS http://127.0.0.1:18080/config.js | grep -F 'mode: "demo"'
           docker rm -f prohodnaya-demo
           docker run -d --name prohodnaya-api -p 127.0.0.1:18081:8080 -e FRONTEND_MODE=api -e API_BASE_URL=https://example.org/api ghcr.io/bombomteam/prohodnaya-frontend:latest
-          curl --retry 10 --retry-delay 1 --retry-connrefused -fsS http://127.0.0.1:18081/healthz
+          curl --retry 10 --retry-delay 1 --retry-all-errors -fsS http://127.0.0.1:18081/healthz || { docker logs prohodnaya-api; exit 1; }
           curl -fsS http://127.0.0.1:18081/config.js | grep -F 'apiBaseUrl: "https://example.org/api"'
           docker rm -f prohodnaya-api
           docker network create prohodnaya-smoke
           docker run -d --name backend --network prohodnaya-smoke ghcr.io/bombomteam/prohodnaya-frontend:latest
           docker run -d --name prohodnaya-proxy --network prohodnaya-smoke -p 127.0.0.1:18082:8080 -e FRONTEND_MODE=api -e API_UPSTREAM=http://backend:8080 ghcr.io/bombomteam/prohodnaya-frontend:latest
-          curl --retry 10 --retry-delay 1 --retry-connrefused -fsS http://127.0.0.1:18082/healthz
+          curl --retry 10 --retry-delay 1 --retry-all-errors -fsS http://127.0.0.1:18082/healthz || { docker logs prohodnaya-proxy; exit 1; }
           curl -fsS http://127.0.0.1:18082/config.js | grep -F 'apiBaseUrl: "/api"'
           docker rm -f prohodnaya-proxy backend
           docker network rm prohodnaya-smoke
