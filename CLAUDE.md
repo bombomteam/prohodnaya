@@ -15,7 +15,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Before work: `git pull --rebase`. Work in your own branch; into `main` only via PR. Never `git push --force`. A push to `main` deploys to the stand, so run backend tests first.
 - Never commit `.env`, passwords, tokens, keys, photos/videos (except `case_prerekvizity/`), models, archives, DB dumps, files > 1 MB. Check `git status` and `git add` files by name, not `-A` or a whole directory.
 - Small commits: `бэк: …` (`фронт: …`, `keycloak: …` for others).
-- Red CI on GitHub: open Actions, find the failed step, fix it in your branch.
+- CI runs on every push and PR (tests of your part, secret and junk scan); the result is the `ci-ok` check. Into `main` only via a PR with green `ci-ok`. Red CI: open Actions, find the failed step, fix it in your branch. DB-backed backend tests skip without Postgres, so a green `ci-ok` alone doesn't prove they ran — also run them in the container.
+- Push to `main` deploys to the stand https://hack-detect.duckdns.org (login: https://auth.hack-detect.duckdns.org). A failed deploy rolls back automatically; manual rollback: Actions → Rollback → Run workflow. `git push --force` is forbidden.
+- Full rules: section «Git, CI и стенд» in `AGENTS.md`.
 
 # Commands
 
