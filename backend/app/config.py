@@ -1,0 +1,48 @@
+import os
+from dataclasses import dataclass
+
+
+def _int(name: str, default: int) -> int:
+    return int(os.environ.get(name) or default)
+
+
+@dataclass(frozen=True)
+class Settings:
+    database_url: str
+    data_dir: str
+    cors_origins: list[str]
+    public_app_url: str
+    site_tz: str
+    pass_session_ttl_s: int
+    enroll_code_ttl_min: int
+    face_match_threshold: float
+    face_min_matches: int
+    location_interval_s: int
+    location_max_age_s: int
+    auth_dev_bypass: bool
+    kc_public_url: str
+    kc_internal_url: str
+
+
+def load_settings() -> Settings:
+    """Читает все настройки из переменных окружения; пустое значение = значение по умолчанию."""
+    env = os.environ.get
+    return Settings(
+        database_url=env("DATABASE_URL", ""),
+        data_dir=env("DATA_DIR") or "/data",
+        cors_origins=[o.strip() for o in (env("CORS_ORIGINS") or "").split(",") if o.strip()],
+        public_app_url=env("PUBLIC_APP_URL", ""),
+        site_tz=env("SITE_TZ") or "Europe/Moscow",
+        pass_session_ttl_s=_int("PASS_SESSION_TTL_S", 90),
+        enroll_code_ttl_min=_int("ENROLL_CODE_TTL_MIN", 60),
+        face_match_threshold=float(env("FACE_MATCH_THRESHOLD") or 0.4),
+        face_min_matches=_int("FACE_MIN_MATCHES", 2),
+        location_interval_s=_int("LOCATION_INTERVAL_S", 30),
+        location_max_age_s=_int("LOCATION_MAX_AGE_S", 180),
+        auth_dev_bypass=(env("AUTH_DEV_BYPASS") or "false").lower() == "true",
+        kc_public_url=env("KC_PUBLIC_URL", ""),
+        kc_internal_url=env("KC_INTERNAL_URL", ""),
+    )
+
+
+settings = load_settings()

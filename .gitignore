@@ -222,3 +222,12 @@ AGENTS.MD
 case_prerekvizity
 skills
 README.md
+!backend/README.md
+
+# Backend: данные, модели, фото эталонов
+/data/
+*.onnx
+backend/**/*.jpg
+backend/**/*.jpeg
+backend/**/*.png
+backend/**/*.webp
