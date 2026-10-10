@@ -11,6 +11,8 @@
 
 Backend защищает операторские маршруты Bearer JWT Keycloak. В этой ветке нет `/auth/config`, `/auth/exchange`, `/auth/refresh`, `/auth/logout`, которые использует браузерный PKCE-клиент. Поэтому обычный вход оператора до их реализации не работает. Для локальной проверки API можно открыть `http://localhost:8080/?devRole=admin`, `manager` или `controller` при `AUTH_DEV_BYPASS=true` на backend. Этот режим ограничен браузерным localhost; сервер должен отдельно включить bypass. Рабочий открывает `?worker=1`.
 
+Точный контракт для реализации `/auth/*` — [задание бэкендеру](backend-auth-handoff.md). Redirect URI всегда `location.origin + "/"`; на стенде это `https://hack-detect.duckdns.org/`, Keycloak — `https://auth.hack-detect.duckdns.org`. Клиент `panel` должен иметь default scopes `basic`, `acr` и audience `access-api`. Уже импортированный realm обновляет владелец стенда после слияния PR.
+
 ## Администратор
 
 - `GET /groups`, `POST /groups` (`name`, `parent_id`), `GET /persons`: группы и таблица; `PersonOut` содержит `fio`, `position`, `group`, `status`, `on_site`, `has_face`, `has_active_device`.
@@ -29,6 +31,10 @@ Backend защищает операторские маршруты Bearer JWT Ke
 5. Рабочий отправляет `POST /locations`: `device_id`, точная JSON-строка `payload` с `ts` и `points[{ts,lat,lon,accuracy}]`, а также ECDSA-подпись точных байтов этой строки. Сервер отвечает `accepted`/`rejected`.
 
 В backend пока нет `/worker/me`, поэтому статус своей смены на телефоне неизвестен. Сервер обязан ограничивать приём геолокации открытой сменой. Не реализованы идемпотентность регистрации/прохода и восстановление ключа после сбоя ответа.
+
+Технические отказы: `404 SESSION_NOT_FOUND`, `403 DEVICE_INVALID`, `409 SESSION_EXPIRED`, `403 SESSION_FOREIGN`. Фронт сохраняет HTTP-статус и `code`, показывает серверный `message`, в том числе при 403. Общие сообщения 401/403 используются только при отсутствии текста сервера. Отказ по правилам — HTTP 200 с `decision: "deny"`, показывается как результат прохода. Проверка лица и сохранение эталона ждут до 35 секунд (`config.faceRequestTimeoutMs`), чтобы успеть получить ответ прокси с таймаутом 30 секунд; остальные запросы — 15 секунд (`config.requestTimeoutMs`). Автоматического повтора прохода нет.
+
+`/enroll?code=…` обслуживается контейнером фронта как экран рабочего; код заполняется в форме и удаляется из адресной строки. `/enroll/` перенаправляется на `/enroll` с сохранением query. Для локального статического сервера без этого маршрута используйте `/?worker=1&code=…`.
 
 ## Руководитель
 

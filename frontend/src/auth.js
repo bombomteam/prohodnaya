@@ -1,4 +1,5 @@
 import { config } from "../config.js";
+import { requireSecureContext } from "./device.js";
 let transport;
 let tokens;
 let settings;
@@ -23,16 +24,17 @@ export function demoRole(role) {
 }
 export function useWorker() { Object.assign(session, { kind: "worker", roles: [], name: "Рабочий", dev: false }); }
 function base64url(bytes) { return btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,""); }
-function redirectUri() { const url = new URL(location.href); url.search = ""; url.hash = ""; return url.href; }
+function redirectUri() { return location.origin + "/"; }
 function accept(result) {
   if (!result?.accessToken || !result.user || !Array.isArray(result.user.roles) || !Number.isFinite(Number(result.expiresIn)) || Number(result.expiresIn) <= 0) throw new Error("Сервер не вернул проверенный профиль оператора.");
   tokens = { ...result, expiresAt: Date.now() + Number(result.expiresIn) * 1000 };
   Object.assign(session, {kind:"operator",roles:result.user.roles,name:result.user.preferred_username || "Оператор"});
 }
 export async function initAuth() {
-  if (config.mode === "demo") { demoRole("admin"); return; }
   const url = new URL(location.href);
-  if (url.searchParams.get("worker") === "1") { useWorker(); return; }
+  const workerEntry = url.searchParams.get("worker") === "1" || ["/enroll", "/enroll/"].includes(url.pathname);
+  if (config.mode === "demo") { demoRole(workerEntry ? "worker" : "admin"); return; }
+  if (workerEntry) { useWorker(); return; }
   const devRole = url.searchParams.get("devRole");
   if (devRole) {
     if (!["localhost", "127.0.0.1"].includes(url.hostname) || !["admin", "manager", "controller"].includes(devRole)) {
@@ -51,6 +53,7 @@ export async function initAuth() {
   accept(await transport("/auth/exchange", {method:"POST",auth:"none",body:{code,codeVerifier:saved.verifier,redirectUri:saved.redirectUri}}));
 }
 export async function login() {
+  requireSecureContext("Для входа откройте приложение по HTTPS или на localhost.");
   try { settings = await transport("/auth/config", {auth:"none"}); }
   catch (error) { if (error.status === 404) throw new Error("В текущем бэкенде нет маршрутов /auth/*. Операторский вход ещё не подключён."); throw error; }
   const endpoint = new URL(settings.authorizationEndpoint);
