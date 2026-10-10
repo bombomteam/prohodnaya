@@ -1,0 +1,49 @@
+# Плановый дамп БД прода раз в 6 часов (и кнопкой). Запускает deploy/backup-db.sh на сервере.
+# Дампы: /srv/prohodnaya-state/backups/, хранятся последние 10. Контракт: docs/pipeline.md.
+name: Бэкап БД прода
+
+on:
+  schedule:
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: stand-prod
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    # Расписание всегда идёт с main; кнопка — тоже только с main.
+    # environment не задаём: если у production включено подтверждение, плановый бэкап
+    # повис бы в ожидании человека. Секреты GitHub задаче не нужны.
+    if: github.repository == 'bombomteam/prohodnaya' && github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, gpu]
+    timeout-minutes: 20
+    env:
+      STAND_DIR: /srv/prohodnaya
+      STATE_DIR: /srv/prohodnaya-state
+      PROJECT_NAME: prohodnaya
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          clean: true
+          persist-credentials: false
+
+      - name: Дамп БД
+        run: |
+          set -euo pipefail
+          if [[ -z "$("$GITHUB_WORKSPACE/deploy/dc" ps -q --status running db 2>/dev/null)" ]]; then
+            echo "::warning::БД на проде не запущена (сервис db) — дамп не снят"
+            echo "БД на проде не запущена — дамп не снят" >>"$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          label="scheduled-$(date -u +%Y%m%dT%H%M%SZ)"
+          "$GITHUB_WORKSPACE/deploy/backup-db.sh" --label "$label" | tee "$RUNNER_TEMP/backup.log"
+          echo "Дамп снят: \`$(tail -n1 "$RUNNER_TEMP/backup.log")\`" >>"$GITHUB_STEP_SUMMARY"
