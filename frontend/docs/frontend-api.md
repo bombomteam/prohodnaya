@@ -36,7 +36,7 @@ Backend защищает операторские маршруты Bearer JWT Ke
 - `GET /reports/person/{id}?from&to`: табель конкретного сотрудника. Общего `/reports/shifts` нет. Список сотрудников для выбора из `/site/now` содержит только тех, кто сейчас внутри.
 - `POST /assistant/ask` с `question`; `POST /assistant/summary` с `date_from`, `date_to`. Ответ `{status,text,facts_used}`.
 
-`image_url` текущего stub-плана равен `/files/plan/plan.png`, но маршрута файла на ветке нет. Интерфейс показывает зоны без фонового изображения, пока backend не начнёт отдавать доступный URL.
+`image_url` текущего stub-плана равен `/files/plan/plan.png`, но маршрута файла в backend нет. Интерфейс показывает зоны без фонового изображения, пока backend не начнёт отдавать доступный URL.
 
 ## Статус backend
 
