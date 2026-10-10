@@ -1,0 +1,30 @@
+# Bench env for the InsightFace candidate (SCRFD det_10g + ArcFace w600k_r50, buffalo_l), CPU only.
+# Python 3.12. Full pinned set; install WITHOUT dependency resolution, because insightface 2.1
+# declares a dependency on opencv-python (GUI build, needs libGL) and we use the headless build:
+#   ~/bin/uv pip install -p face/eval/bench/insightface/.venv/bin/python --no-deps -r face/eval/bench/insightface/requirements.txt
+# (plain pip: pip install --no-deps -r requirements.txt)
+insightface==2.1
+onnxruntime==1.31.0
+opencv-python-headless==5.0.0.93
+numpy==2.5.3
+pillow==12.3.0
+# runtime deps of insightface 2.1 (FaceAnalysis imports scipy/scikit-image/onnx/requests/tqdm)
+onnx==1.23.2
+scikit-image==0.26.0
+scipy==1.18.1
+tqdm==4.70.1
+requests==2.34.2
+# transitive
+certifi==2026.7.22
+charset-normalizer==3.5.2
+flatbuffers==25.12.19
+idna==3.20
+imageio==2.38.1
+lazy-loader==0.6
+ml-dtypes==0.6.0
+networkx==3.7
+packaging==26.3
+protobuf==7.36.2
+tifffile==2026.9.20
+typing-extensions==4.16.0
+urllib3==2.8.0

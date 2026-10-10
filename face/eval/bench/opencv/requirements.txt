@@ -1,0 +1,11 @@
+# Bench env for the OpenCV candidate (YuNet + SFace via cv2.FaceDetectorYN / cv2.FaceRecognizerSF), CPU only.
+# Python 3.12.
+#   ~/bin/uv pip install -p face/eval/bench/opencv/.venv/bin/python -r face/eval/bench/opencv/requirements.txt
+opencv-python-headless==5.0.0.93
+onnxruntime==1.31.0
+numpy==2.5.3
+pillow==12.3.0
+# transitive (onnxruntime)
+flatbuffers==25.12.19
+packaging==26.3
+protobuf==7.36.2
