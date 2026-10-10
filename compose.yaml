@@ -201,8 +201,12 @@ services:
     pids_limit: 100
     stop_grace_period: 5s
     networks:
-      - edge           # для опубликованного порта 1935
-      - face-internal  # RTSP для модуля face
+      edge: {}         # для опубликованного порта 1935
+      face-internal:   # RTSP для модуля face
+        # Имя, которое резолвится только во внутренней сети: face-console в двух сетях, и по имени
+        # camera-relay мог прийти через edge — тогда reader отклоняется (доступ только из face-internal).
+        aliases: [camera-relay-internal]
+
   # Тестовая консоль модуля лиц для команды: живой просмотр камеры (люди и лица) и проверка файлов.
   # Отдельный экземпляр (не тот, что проверяет проход), порт только на 127.0.0.1 — наружу через общий
   # Caddy (console.<IP>.sslip.io с basic auth). Камеру читает из camera-relay во внутренней сети.
