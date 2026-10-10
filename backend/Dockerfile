@@ -11,6 +11,8 @@ COPY requirements.txt .
 RUN pip install -r requirements.txt
 
 COPY app ./app
+COPY alembic.ini ./
+COPY alembic ./alembic
 COPY tests ./tests
 COPY entrypoint.sh .
 RUN chmod +x entrypoint.sh
