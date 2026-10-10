@@ -16,7 +16,7 @@ const state = {
   page: "overview", employees: [], groups: [], attempts: [], dashboard: null, analytics: null, shiftReport: null, personReport: null, site: null, selectedRouteId: null,
   worker: null, workerId: "", workerPassage: null, gateEmployeeId: "", direction: "entry", challenge: null, passResult: null,
   cameraStream: null, faceBlob: null, faceFrames: [], faceUrl: null, employeeError: null, locationWatch: null, locationLastSent: 0,
-  locationStatus: "Геолокация выключена", workerNotice: "", assistant: null, busy: false, toast: null, loadError: null, mobileMenu: false,
+  locationStatus: "Геолокация выключена", workerNotice: "", assistant: null, assistantInfo: null, busy: false, toast: null, loadError: null, mobileMenu: false,
   filters: { from: nowDate(), to: nowDate(), hourFrom: "0", hourTo: "23", employeeIds: "" },
 };
 
@@ -66,6 +66,7 @@ async function refresh(page = state.page) {
     if (page === "worker" && config.mode === "demo") state.employees = await api.employees();
     if (page === "gate") state.employees = await api.gatePeople();
     if (page === "journal") state.attempts = await api.attempts();
+    if (page === "assistant") state.assistantInfo = await api.assistantStatus().catch(() => ({ failed: true, switchable: false }));
     if (page === "analytics") {
       const availablePeople = config.mode === "demo" ? await api.employees() : await api.reportPeople();
       [state.site, state.analytics, state.shiftReport] = await Promise.all([api.site(), api.analytics(state.filters), api.shiftReport(state.filters)]);
@@ -236,8 +237,41 @@ function mapView() {
     <aside class="map-side"><section class="panel"><div class="panel-heading"><div><h2>Работники</h2><p>Откройте карту по ФИО</p></div></div><div class="worker-route-cards">${people.length ? people.map(person => { const count = data.routes.find(item => String(item.employeeId) === String(person.id))?.points.length || 0; return `<button type="button" class="worker-route-card ${state.selectedRouteId === String(person.id) ? "active" : ""}" data-action="show-route" data-id="${esc(person.id)}" aria-pressed="${state.selectedRouteId === String(person.id)}" aria-controls="route-detail"><span class="person-avatar small">${esc(initials(person.name))}</span><span><b>${esc(person.name)}</b><small>${count ? `${count} точек за период` : "Нет точек за период"}</small></span><span aria-hidden="true">→</span></button>`; }).join("") : '<div class="empty compact">Сотрудников пока нет.</div>'}</div></section>
     <section class="panel"><div class="panel-heading"><div><h2>Фильтры</h2><p>Для схемы и маршрутов</p></div></div><form id="filters-form" class="filters-form"><div class="form-grid"><label>С даты<input type="date" name="from" value="${esc(state.filters.from)}" required></label><label>По дату<input type="date" name="to" value="${esc(state.filters.to)}" required></label></div><div class="form-grid"><label>Часы с<input type="number" name="hourFrom" min="0" max="23" value="${esc(state.filters.hourFrom)}"></label><label>Часы до<input type="number" name="hourTo" min="0" max="23" value="${esc(state.filters.hourTo)}"></label></div><label>Сотрудники<select name="employeeIds" multiple size="4">${people.map(person => `<option value="${esc(person.id)}" ${state.filters.employeeIds.split(",").includes(String(person.id)) ? "selected" : ""}>${esc(person.name)}</option>`).join("")}</select><small>Без выбора — все сотрудники. Ctrl для выбора нескольких.</small></label><button class="button button-primary wide">Показать данные</button></form></section>${settings}</aside></div>`;
 }
+const ASSISTANT_SUGGESTIONS = ["Кто сейчас на объекте?", "Сводка за сегодня", "Кто вчера отработал меньше 8 часов?", "В какой зоне больше всего людей?", "Отказы за неделю и причины"];
+const ASSISTANT_STATUS = {
+  ok: ["badge-green", "Ответ по данным системы"],
+  no_data: ["badge-muted", "Данных нет"],
+  unavailable: ["badge-amber", "Модель недоступна — показаны цифры системы"],
+  bad_response: ["badge-amber", "Модель дала некорректный ответ — показаны цифры системы"],
+};
+const providerLabel = provider => provider === "ollama" ? "локальная модель (Ollama)" : provider === "external" ? "внешняя модель" : "модель";
+function factsBlock(facts) {
+  if (facts == null || (Array.isArray(facts) && !facts.length) || (typeof facts === "object" && !Array.isArray(facts) && !Object.keys(facts).length)) return "";
+  const body = Array.isArray(facts) && facts.every(item => typeof item !== "object") ? `<ul>${facts.map(item => `<li>${esc(item)}</li>`).join("")}</ul>` : `<pre>${esc(typeof facts === "string" ? facts : JSON.stringify(facts, null, 2))}</pre>`;
+  return `<details class="assistant-facts"><summary>Цифры системы</summary>${body}</details>`;
+}
+function assistantAnswer(answer) {
+  if (!answer) return "";
+  const [badge, label] = ASSISTANT_STATUS[answer.status] || ["badge-muted", "Статус ответа не распознан"];
+  const replied = ["ok", "no_data"].includes(answer.status);
+  const who = answer.provider || answer.model ? `<small class="assistant-model">${replied ? "Ответила" : "Модель (не ответила)"}: ${esc(providerLabel(answer.provider))}${answer.model ? ` ${esc(answer.model)}` : ""}</small>` : "";
+  return `<div class="assistant-answer"><span class="eyebrow">ОТВЕТ СИСТЕМЫ</span> <span class="badge ${badge}">${esc(label)}</span><p>${esc(answer.answer || "Данных для ответа нет.")}</p>${factsBlock(answer.factsUsed)}${who}</div>`;
+}
+function assistantModelBlock() {
+  const info = state.assistantInfo;
+  let body;
+  if (!info) body = '<p class="muted">Статус модели не загружен.</p>';
+  else if (info.demo) body = '<p class="muted">Деморежим: модель не подключена.</p>';
+  else if (info.failed) body = '<p class="muted">Статус модели недоступен. Переключение недоступно.</p>';
+  else {
+    const status = info.provider ? `<p><b>${esc(providerLabel(info.provider))}</b>${info.model ? ` · ${esc(info.model)}` : ""}</p><p><span class="badge ${info.configured ? "badge-green" : "badge-amber"}">${info.configured ? "Настроена" : "Не настроена"}</span> <span class="badge ${info.available ? "badge-green" : "badge-red"}">${info.available ? "Доступна" : "Недоступна"}</span></p>` : "";
+    const switcher = info.switchable === false ? '<p class="muted">Переключение недоступно.</p>' : `<div class="segment">${[["ollama", "Локальная"], ["external", "Внешняя"]].map(([id, label]) => `<button class="${info.provider === id ? "selected" : ""}" data-action="set-provider" data-provider="${id}" ${state.busy ? "disabled" : ""}>${label}</button>`).join("")}</div>`;
+    body = status + switcher;
+  }
+  return `<div class="assistant-model-block"><h3>Модель помощника</h3>${body}</div>`;
+}
 function assistant() {
-  return `<div class="assistant-layout"><section class="panel assistant-panel"><div class="assistant-intro"><span class="assistant-mark">✦</span><div><h2>Спросите об объекте</h2><p>Ответы строятся по данным сервера. Если данных нет, помощник должен сказать об этом прямо.</p></div></div><div class="suggestions">${["Кто сейчас на объекте?", "Были ли отказы на входе за неделю и почему?", "В какой зоне вчера было больше всего людей?"].map(q => `<button data-action="suggest-question" data-question="${esc(q)}">${esc(q)} →</button>`).join("")}</div><form id="question-form" class="question-form"><textarea name="question" rows="3" placeholder="Например: кто вчера отработал меньше четырёх часов?" required></textarea><button class="button button-primary" ${state.busy ? "disabled" : ""}>Отправить вопрос</button></form>${state.assistant ? `<div class="assistant-answer"><span class="eyebrow">ОТВЕТ СИСТЕМЫ</span><p>${esc(state.assistant.answer || "Данных для ответа нет.")}</p>${state.assistant.status === "unavailable" ? '<small>Попробуйте позже после подключения сервера и модели.</small>' : ""}</div>` : ""}</section><aside class="panel summary-panel"><div class="panel-heading"><div><h2>Сводка за период</h2><p>Текст для передачи заказчику</p></div></div><form id="summary-form" class="filters-form"><label>С даты<input type="date" name="from" value="${nowDate()}" required></label><label>По дату<input type="date" name="to" value="${nowDate()}" required></label><button class="button button-outline wide" ${state.busy ? "disabled" : ""}>Сформировать сводку</button></form><div class="note-card"><b>Числа считает система</b><p>Модель формулирует текст на основе проверенных агрегатов. Фронт показывает ответ и не подставляет вымышленные цифры.</p></div></aside></div>`;
+  return `<div class="assistant-layout"><section class="panel assistant-panel"><div class="assistant-intro"><span class="assistant-mark">✦</span><div><h2>Спросите об объекте</h2><p>Ответы строятся по данным сервера. Если данных нет, помощник должен сказать об этом прямо.</p></div></div><div class="suggestions">${ASSISTANT_SUGGESTIONS.map(q => `<button data-action="suggest-question" data-question="${esc(q)}">${esc(q)} →</button>`).join("")}</div><form id="question-form" class="question-form"><textarea name="question" rows="3" placeholder="Например: кто вчера отработал меньше четырёх часов?" required></textarea><button class="button button-primary" ${state.busy ? "disabled" : ""}>Отправить вопрос</button></form>${assistantAnswer(state.assistant)}</section><aside class="panel summary-panel"><div class="panel-heading"><div><h2>Сводка за период</h2><p>Текст для передачи заказчику</p></div></div><form id="summary-form" class="filters-form"><label>С даты<input type="date" name="from" value="${nowDate()}" required></label><label>По дату<input type="date" name="to" value="${nowDate()}" required></label><button class="button button-outline wide" ${state.busy ? "disabled" : ""}>Сформировать сводку</button></form>${assistantModelBlock()}<div class="note-card"><b>Числа считает система</b><p>Модель формулирует текст на основе проверенных агрегатов. Фронт показывает ответ и не подставляет вымышленные цифры.</p></div></aside></div>`;
 }
 
 function journal() {
@@ -412,6 +446,10 @@ root.addEventListener("click", async (event) => {
     }, () => { state.locationStatus = "Нет доступа к местоположению. Разрешите его в настройках браузера."; render(); }, { enableHighAccuracy: true, maximumAge: 10000, timeout: 15000 });
     return;
   }
+  if (action === "set-provider") {
+    await run(async () => { const next = await api.setAssistantProvider(button.dataset.provider); state.assistantInfo = next.unsupported ? { ...state.assistantInfo, switchable: false } : next; });
+    return;
+  }
   if (action === "suggest-question") { document.querySelector('#question-form [name="question"]').value = button.dataset.question; document.querySelector('#question-form [name="question"]').focus(); }
 });
 
@@ -550,7 +588,7 @@ setInterval(async () => {
 
 window.addEventListener("operator-session-expired", (event) => {
   stopLocation(); clearChallenge(); Object.assign(session, { kind: "guest", roles: [], name: "" });
-  state.employees = []; state.attempts = []; state.dashboard = null; state.enrollCode = null; state.assistant = null;
+  state.employees = []; state.attempts = []; state.dashboard = null; state.enrollCode = null; state.assistant = null; state.assistantInfo = null;
   entryError = event.detail?.message || "Сессия истекла, войдите заново"; render();
 });
 window.addEventListener("beforeunload", () => { stopCamera(); stopLocation(); });

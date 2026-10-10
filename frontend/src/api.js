@@ -107,6 +107,9 @@ function mapPassage(value) {
   };
 }
 
+const assistantAnswer = value => ({ status: value.status, answer: value.text, factsUsed: value.facts_used, provider: value.provider, model: value.model });
+const assistantInfo = value => ({ switchable: true, provider: value.provider, model: value.model, configured: Boolean(value.configured), available: Boolean(value.available) });
+
 export const backendApi = {
   groups: () => request("/groups"),
   createGroup: (name, parentId) => request("/groups", { method: "POST", body: { name, parent_id: parentId ? Number(parentId) : null } }),
@@ -219,8 +222,14 @@ export const backendApi = {
   updateCalibration: points => request("/site/calibration", { method: "PUT", body: { points } }),
   updateZones: zones => request("/zones", { method: "PUT", body: { zones } }),
   updateSite: () => { throw new ApiError("Для нового API настройте план, калибровку и зоны отдельно."); },
-  ask: async question => { const value = await request("/assistant/ask", { method: "POST", body: { question } }); return { status: value.status, answer: value.text, factsUsed: value.facts_used }; },
-  summary: async (from, to) => { const value = await request("/assistant/summary", { method: "POST", body: { date_from: from, date_to: to } }); return { status: value.status, answer: value.text, factsUsed: value.facts_used }; },
+  ask: async question => assistantAnswer(await request("/assistant/ask", { method: "POST", body: { question } })),
+  summary: async (from, to) => assistantAnswer(await request("/assistant/summary", { method: "POST", body: { date_from: from, date_to: to } })),
+  assistantStatus: async () => {
+    try { return assistantInfo(await request("/assistant/status")); } catch (error) { if (error.status === 404) return { switchable: false, unsupported: true }; throw error; }
+  },
+  setAssistantProvider: async provider => {
+    try { return assistantInfo(await request("/assistant/provider", { method: "PUT", body: { provider } })); } catch (error) { if (error.status === 404) return { switchable: false, unsupported: true }; throw error; }
+  },
 };
 
 export const api = config.mode === "demo" ? demoApi : backendApi;

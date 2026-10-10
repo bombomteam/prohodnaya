@@ -192,4 +192,6 @@ export const demoApi = {
   async site() { return clone(read().site); },
   async ask() { return { status: "unavailable", answer: "В деморежиме ответы помощника отключены. Для ответа на реальных данных нужен сервер аналитики и модель." }; },
   async summary() { return { status: "unavailable", answer: "Сводка появится после подключения сервера аналитики и модели. Деморежим не придумывает показатели." }; },
+  async assistantStatus() { return { demo: true, switchable: false }; },
+  async setAssistantProvider() { return { demo: true, switchable: false, unsupported: true }; },
 };
