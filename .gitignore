@@ -218,3 +218,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+.claude
+AGENTS.MD
+case_prerekvizity
+skills
+README.md
+CLAUDE.md
