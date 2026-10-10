@@ -27,7 +27,7 @@ docker build -t prohodnaya-face:local face/
 
 Почему качаем при сборке, а не копируем `face/models/`: папка в Git не хранится, а на чистой машине её нет. Скрипт с sha256 даёт одинаковый результат на любой машине. `.dockerignore` — белый список: в контекст сборки попадают только `app/`, `requirements.txt`, `models/fetch_models.sh` и код экспорта MiniFASNet. Фото, видео, `eval/out`, `.venv`, локальные веса в образ не попадают.
 
-Первая сборка — около 4 минут (≈ 1,5 ГБ пакетов torch и tensorflow для стадии весов). Повторные сборки после правок кода — секунды: стадия весов берётся из кэша.
+Первая сборка — около 3,5 минуты (≈ 1,5 ГБ пакетов torch и tensorflow для стадии весов). Повторные сборки после правок кода — секунды: стадия весов берётся из кэша.
 
 ## Запуск как в `x-hardened`
 
@@ -96,6 +96,31 @@ FACE_BASE_URL=http://127.0.0.1:18000 face/.venv/bin/python -m pytest face/tests/
 
 Общий скрипт и разметка — [face/eval/README.md](../eval/README.md). Пакет кейса: `face/eval/labels.csv`; свои съёмки — `~/face-data/labels.csv` (только на сервере). Результаты — в `face/eval/out/` (в Git не попадают), в Git — только текстовый отчёт в `face/docs/`.
 
-## Замеры (сервер команды: 16 vCPU Xeon Cascade Lake, только CPU)
+## Замеры (2026-10-10, сервер команды: 16 vCPU Xeon Cascade Lake, только CPU)
 
-См. итог этапа 5 в `PLAN.md`; заполняется по результатам `docker run` выше.
+Важно: сервер в момент замера был сильно загружен параллельными прогонами (load average 59–115 на 16 vCPU), поэтому время анализа завышено в несколько раз. Повторить на свободной машине.
+
+| Что | Значение |
+| --- | --- |
+| Образ `prohodnaya-face:local` | 669 МБ сжато (content size), ≈ 1,0 ГБ распакованных слоёв: база 3.12-slim, пакеты Python 347 МБ, веса 555 МБ |
+| Первая сборка | ≈ 3,5 мин (стадия весов, потом кэш) |
+| Старт до `models_loaded: true` | 3,5 с от `docker run` (загрузка моделей 1,2 с), `--network none`, `--read-only` |
+| Память | 505 МБ после старта, 697 МБ после 70 запросов |
+| `references/check` | медиана 1,1 с (n = 10) |
+| `verify/frames`, 1 кадр, HTTP | медиана 1,0 с, p90 1,2 с (n = 58 кадров пакета) |
+| `verify/frames`, 4 кадра | медиана 3,7 с, максимум 5,5 с |
+| Разбивка одного кадра (медиана, n = 20) | люди 182 мс, детекция 131 мс, эмбеддинг glintr100 629 мс, антиспуфинг 19 мс, всего 969 мс |
+
+Под нагрузкой 4 кадра в запасном режиме подходят к таймауту бэкенда (5 с). Основной вклад — glintr100.
+
+Проверка ограничений `x-hardened` (вывод из контейнера, запущенного командой выше):
+
+```text
+uid=10001(face) gid=10001(face) groups=10001(face)
+touch: cannot touch '/app/x': Read-only file system
+touch: cannot touch '/models/x': Read-only file system
+tmp-writable
+CapPrm/CapEff/CapBnd: 0000000000000000, NoNewPrivs: 1
+ReadonlyRootfs=true User=10001:10001 Network=none CapDrop=[ALL] SecOpt=[no-new-privileges]
+сетевые интерфейсы: [(1, 'lo')]; Health=healthy
+```

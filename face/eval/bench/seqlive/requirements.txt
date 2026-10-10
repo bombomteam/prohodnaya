@@ -1,0 +1,14 @@
+# seqlive: живость по последовательности кадров (MediaPipe Face Mesh в onnxruntime), CPU only.
+# Python 3.12. Те же версии, что у кандидата bench/opencv, — общий скрипт можно гонять из этого venv.
+#   ~/bin/uv venv --python 3.12 face/eval/bench/seqlive/.venv
+#   ~/bin/uv pip install -p face/eval/bench/seqlive/.venv/bin/python -r face/eval/bench/seqlive/requirements.txt
+numpy==2.5.3
+pillow==12.3.0
+opencv-python-headless==5.0.0.93
+onnxruntime==1.31.0
+# transitive (onnxruntime)
+flatbuffers==25.12.19
+packaging==26.3
+protobuf==7.36.2
+# Только для одноразовой конвертации TFLite → ONNX (fetch_models.py --convert) ставится
+# в отдельный временный venv, не сюда: tensorflow-cpu==2.21.0, tf2onnx==1.17.0, onnx==1.23.2.
