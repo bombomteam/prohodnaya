@@ -27,6 +27,17 @@ services:
               count: 1
               capabilities: [gpu]
 
+  # Локальная модель помощника: на видеокарте стенда (общая с face; qwen2.5:1.5b занимает порядка 1–2 ГБ).
+  # Если видеокарта недоступна, ollama сам считает на CPU.
+  ollama:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
   caddy:
     # HTTPS для всего стенда: сертификаты Let's Encrypt выпускаются и продлеваются сами.
     # Сеть хоста: Caddy ходит к сервисам через их порты на 127.0.0.1 и к странице

@@ -1,4 +1,4 @@
-# Стенд «Проходной»: frontend, Keycloak, backend и db (db и backend — профиль backend).
+# Стенд «Проходной»: frontend, Keycloak, backend, db, face и ollama (всё, кроме frontend и Keycloak, — профиль backend).
 #
 # Запуск из корня репозитория:
 #   cp .env.example .env        # при необходимости поправить значения
@@ -33,9 +33,12 @@ services:
       context: ./frontend
     user: "101:101"
     environment:
-      FRONTEND_MODE: ${FRONTEND_MODE:-demo}
+      # По умолчанию api: фронт ходит в бэкенд. Демо без сервера: FRONTEND_MODE=demo и пустой API_UPSTREAM= в .env.
+      FRONTEND_MODE: ${FRONTEND_MODE:-api}
       API_BASE_URL: ${API_BASE_URL:-}
-      API_UPSTREAM: ${API_UPSTREAM:-}
+      # Без двоеточия в `-`: умолчание http://backend:8000 берётся, только если переменная не задана вовсе;
+      # явно пустая API_UPSTREAM= (демо, либо внешний API_BASE_URL, как на стенде) остаётся пустой.
+      API_UPSTREAM: ${API_UPSTREAM-http://backend:8000}
     # Единственная запись в контейнере — /tmp (config.js, pid и временные файлы nginx).
     tmpfs:
       - /tmp:size=16m,uid=101,gid=101,mode=0700,noexec,nosuid,nodev
@@ -119,6 +122,19 @@ services:
     build:
       context: ./backend
     env_file: .env
+    # Помощник руководителя (backend/app/llm). Умолчания совпадают с backend/app/core/config.py;
+    # переключить на внешний сервис: LLM_PROVIDER=external и LLM_EXTERNAL_* в .env. Зависимости от ollama
+    # нет: пока модель скачивается, помощник сам отвечает «недоступен», остальная система работает.
+    environment:
+      # Таймаут запроса к модулю лиц, секунды; таймаут = отказ «Сервис распознавания недоступен».
+      FACE_TIMEOUT_S: ${FACE_TIMEOUT_S:-10}
+      LLM_PROVIDER: ${LLM_PROVIDER:-ollama}
+      LLM_EXTERNAL_URL: ${LLM_EXTERNAL_URL:-}
+      LLM_EXTERNAL_MODEL: ${LLM_EXTERNAL_MODEL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:1.5b}
+      LLM_TIMEOUT_S: ${LLM_TIMEOUT_S:-60}
     depends_on:
       db:
         condition: service_healthy
@@ -138,6 +154,7 @@ services:
     networks:
       - edge
       - face-internal
+      - llm
 
   # Модуль распознавания лиц (face/, контракт face/docs/api.md). Без ports: — доступен только бэкенду
   # по http://face:8000 во внутренней сети face-internal без выхода наружу. Веса внутри образа.
@@ -245,12 +262,61 @@ services:
       - edge           # для порта 127.0.0.1:8030 (сеть face-internal без выхода наружу порты не публикует)
       - face-internal  # RTSP camera-relay
 
-  # Сюда добавится ollama (его ведёт другой участник).
+  # Локальная модель для помощника руководителя (ollama, backend/app/llm). Без ports: — доступна только
+  # бэкенду по http://ollama:11434 в сети llm (в неё входят только backend и ollama). Сеть llm не internal:
+  # ollama один раз скачивает модель с registry.ollama.ai, поэтому ему нужен выход наружу.
+  # Модель подтягивается в фоне при старте контейнера (повтор при сбое сети), веса лежат в томе ollama_data.
+  # Healthcheck не зависит от скачивания: `ollama list` отвечает, как только поднялся сервер. Пока модель
+  # не скачана, помощник отвечает «недоступен» — на деплой и проверку «жив ли» это не влияет.
+  # GPU на стенде — deploy/compose.stand.yaml; без неё модель считается на CPU.
+  ollama:
+    <<: *hardened
+    # Ollama пишет в свой каталог (ключи, манифесты) и во временные файлы — как keycloak, без read_only.
+    read_only: false
+    profiles: [backend]
+    # Версия закреплена по тегу и digest (манифест-лист; проверено docker manifest inspect, образ не тянули).
+    image: ollama/ollama:0.40.2@sha256:b86366bb528bbf7f1424435d165028497a5b69bf6ddb4fa5a87102e2b79f44fb
+    # В скрипте $$ — это $ для оболочки контейнера (иначе compose подставил бы значение при разборе файла).
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        (
+          sleep 3
+          i=0
+          until ollama pull "$${OLLAMA_MODEL}"; do
+            i=$$((i + 1))
+            [ "$$i" -ge 40 ] && break
+            sleep 15
+          done
+        ) &
+        exec ollama serve
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:1.5b}
+      # Держать модель в памяти между вопросами (по умолчанию 5 минут): на показе не ждать повторной загрузки.
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30m}
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      # Клиент ходит на loopback, а не на 0.0.0.0 из OLLAMA_HOST (адрес прослушивания сервера).
+      test: ["CMD-SHELL", "OLLAMA_HOST=127.0.0.1:11434 ollama list >/dev/null 2>&1"]
+      interval: 15s
+      timeout: 10s
+      start_period: 30s
+      retries: 5
+    cpus: 4.0
+    mem_limit: 8g
+    pids_limit: 1024
+    stop_grace_period: 10s
+    networks:
+      - llm
 
 volumes:
   keycloak_data: {}
   pgdata: {}
   data: {}
+  ollama_data: {}
 
 networks:
   edge: {}
@@ -261,3 +327,6 @@ networks:
       config:
         # На неё ссылается доступ reader в camera-relay (MTX_AUTHINTERNALUSERS_1_IPS).
         - subnet: ${FACE_NET_SUBNET:-172.30.43.0/24}
+  # Бэкенд <-> ollama. Не internal: ollama скачивает модель из интернета. Порты в эту сеть не публикуются,
+  # других сервисов в ней нет, поэтому снаружи и из остальных контейнеров ollama недоступен.
+  llm: {}
