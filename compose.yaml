@@ -1,5 +1,4 @@
-# Стенд «Проходной». Сейчас здесь только frontend; backend, db, keycloak
-# добавляются сюда же отдельными сервисами.
+# Стенд «Проходной»: frontend и Keycloak; backend и БД приложения добавляются отдельно.
 #
 # Запуск из корня репозитория:
 #   cp .env.example .env        # при необходимости поправить значения
@@ -51,6 +50,44 @@ services:
     stop_grace_period: 10s
     networks:
       - edge
+
+  keycloak:
+    <<: *hardened
+    # start-dev выполняет Quarkus augmentation в каталоге установки.
+    read_only: false
+    image: quay.io/keycloak/keycloak:26.5.7
+    command: ["start-dev", "--import-realm"]
+    user: "1000:0"
+    environment:
+      KC_DB: dev-file
+      KC_HOSTNAME: ${KC_PUBLIC_URL:-http://localhost:8081}
+      KC_HTTP_ENABLED: "true"
+      KC_PROXY_HEADERS: ${KC_PROXY_HEADERS:-}
+      KC_HEALTH_ENABLED: "true"
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KC_BOOTSTRAP_ADMIN_USERNAME:-kcadmin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_BOOTSTRAP_ADMIN_PASSWORD:?Set bootstrap admin password in .env}
+      KC_ADMIN1_PASSWORD: ${KC_ADMIN1_PASSWORD:?Set admin1 password in .env}
+      KC_MANAGER1_PASSWORD: ${KC_MANAGER1_PASSWORD:?Set manager1 password in .env}
+      KC_CONTROLLER1_PASSWORD: ${KC_CONTROLLER1_PASSWORD:?Set controller1 password in .env}
+      PANEL_REDIRECT_URI: ${PANEL_REDIRECT_URI:-http://localhost:8080/}
+      PANEL_ORIGIN: ${PANEL_ORIGIN:-http://localhost:8080}
+    volumes:
+      - keycloak_data:/opt/keycloak/data
+      - ./keycloak/import:/opt/keycloak/data/import:ro
+      - ./keycloak/scripts:/opt/keycloak/project-scripts:ro
+    tmpfs:
+      - /tmp:size=64m,uid=1000,gid=0,mode=0700,nosuid,nodev
+    ports:
+      - "${KC_BIND:-127.0.0.1}:${KC_PORT:-8081}:8080"
+    mem_limit: 1g
+    cpus: 1.0
+    pids_limit: 300
+    stop_grace_period: 30s
+    networks:
+      - edge
+
+volumes:
+  keycloak_data: {}
 
 networks:
   edge: {}

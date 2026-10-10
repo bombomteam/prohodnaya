@@ -1,0 +1,116 @@
+{
+  "realm": "construction",
+  "enabled": true,
+  "displayName": "Проходная",
+  "registrationAllowed": false,
+  "resetPasswordAllowed": false,
+  "sslRequired": "external",
+  "accessTokenLifespan": 300,
+  "ssoSessionIdleTimeout": 1800,
+  "ssoSessionMaxLifespan": 28800,
+  "bruteForceProtected": true,
+  "roles": {
+    "realm": [
+      {
+        "name": "admin"
+      },
+      {
+        "name": "manager"
+      },
+      {
+        "name": "controller"
+      }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "panel",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": [
+        "http://localhost:8080/",
+        "http://localhost/",
+        "${PANEL_REDIRECT_URI}"
+      ],
+      "webOrigins": [
+        "http://localhost:8080",
+        "http://localhost",
+        "${PANEL_ORIGIN}"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "+"
+      },
+      "defaultClientScopes": [
+        "web-origins",
+        "profile",
+        "roles",
+        "email"
+      ],
+      "protocolMappers": [
+        {
+          "name": "access-api-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "access-api",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "access-api",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "bearerOnly": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false
+    }
+  ],
+  "users": [
+    {
+      "username": "admin1",
+      "enabled": true,
+      "firstName": "Admin",
+      "lastName": "Demo",
+      "email": "admin1@example.invalid",
+      "emailVerified": true,
+      "realmRoles": [
+        "admin"
+      ],
+      "requiredActions": []
+    },
+    {
+      "username": "manager1",
+      "enabled": true,
+      "firstName": "Manager",
+      "lastName": "Demo",
+      "email": "manager1@example.invalid",
+      "emailVerified": true,
+      "realmRoles": [
+        "manager"
+      ],
+      "requiredActions": []
+    },
+    {
+      "username": "controller1",
+      "enabled": true,
+      "firstName": "Controller",
+      "lastName": "Demo",
+      "email": "controller1@example.invalid",
+      "emailVerified": true,
+      "realmRoles": [
+        "controller"
+      ],
+      "requiredActions": []
+    }
+  ]
+}
