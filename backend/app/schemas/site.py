@@ -1,4 +1,4 @@
-from pydantic import AwareDatetime, BaseModel, Field
+from pydantic import AwareDatetime, BaseModel, Field, field_validator
 
 from app.schemas.common import GroupRef, ZoneRef
 
@@ -19,8 +19,8 @@ class PlanOut(BaseModel):
 
 
 class CalibrationPoint(BaseModel):
-    px: float
-    py: float
+    px: float = Field(ge=0, le=1e6, allow_inf_nan=False)
+    py: float = Field(ge=0, le=1e6, allow_inf_nan=False)
     lat: float = Field(ge=-90, le=90)
     lon: float = Field(ge=-180, le=180)
 
@@ -31,8 +31,17 @@ class CalibrationIn(BaseModel):
 
 class ZoneIn(BaseModel):
     id: int | None = None
-    name: str = Field(min_length=1)
+    name: str
     polygon: list[tuple[float, float]] = Field(min_length=3)  # [[x, y], ...] в пикселях плана
+
+    @field_validator("name")
+    @classmethod
+    def _name(cls, v: str) -> str:
+        """Имя без пробелов по краям; пустое после этого — ошибка валидации (422 VALIDATION)."""
+        v = v.strip()
+        if not v:
+            raise ValueError("пустое имя зоны")
+        return v
 
 
 class ZonesIn(BaseModel):

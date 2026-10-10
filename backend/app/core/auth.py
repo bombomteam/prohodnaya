@@ -32,8 +32,25 @@ def _jwks() -> PyJWKClient:
     """Ленивый клиент JWKS Keycloak (ключи кэшируются самим PyJWKClient)."""
     global _jwks_client
     if _jwks_client is None:
-        _jwks_client = PyJWKClient(f"{settings.kc_internal_url}/realms/construction/protocol/openid-connect/certs")
+        _jwks_client = PyJWKClient(f"{settings.kc_internal_url}/realms/construction/protocol/openid-connect/certs", timeout=5)
     return _jwks_client
+
+
+def verify_token(token: str) -> dict:
+    """Проверяет JWT Keycloak: подпись по JWKS (RS256), exp, iss, aud=access-api, sub. Возвращает claims.
+
+    Бросает jwt.PyJWKClientConnectionError, если JWKS недоступен, и прочие jwt.PyJWTError при плохом токене.
+    """
+    key = _jwks().get_signing_key_from_jwt(token).key
+    return jwt.decode(
+        token,
+        key,
+        algorithms=["RS256"],
+        audience="access-api",
+        leeway=30,  # допуск на расхождение часов
+        issuer=f"{settings.kc_public_url}/realms/construction",
+        options={"require": ["exp", "iss", "aud", "sub"]},
+    )
 
 
 def current_user(
@@ -41,24 +58,15 @@ def current_user(
 ) -> dict:
     """Возвращает claims пользователя: {sub, preferred_username, realm_access: {roles}}.
 
-    При AUTH_DEV_BYPASS=true отдаёт dev-пользователя со всеми ролями. Иначе проверяет Bearer JWT:
-    подпись по JWKS Keycloak (RS256), aud=access-api, iss=KC_PUBLIC_URL/realms/construction.
+    При AUTH_DEV_BYPASS=true отдаёт dev-пользователя со всеми ролями. Иначе проверяет Bearer JWT
+    (см. verify_token).
     """
     if settings.auth_dev_bypass:
         return DEV_USER
     if credentials is None:
         raise _unauthorized("Требуется вход в систему")
-    token = credentials.credentials
     try:
-        key = _jwks().get_signing_key_from_jwt(token).key
-        return jwt.decode(
-            token,
-            key,
-            algorithms=["RS256"],
-            audience="access-api",
-            issuer=f"{settings.kc_public_url}/realms/construction",
-            options={"require": ["exp", "iss", "aud", "sub"]},
-        )
+        return verify_token(credentials.credentials)
     except jwt.PyJWKClientConnectionError:
         log.error("Keycloak (JWKS) недоступен")
         raise HTTPException(503, "Сервис входа временно недоступен, попробуйте позже")

@@ -17,12 +17,14 @@ class PassSession(Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
-    nonce: Mapped[str] = mapped_column(Text)
     direction: Mapped[str] = mapped_column(Text)
     controller_sub: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(Text, server_default=text("'pending'"))
     device_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("devices.id"))
     person_id: Mapped[Optional[int]] = mapped_column(ForeignKey("persons.id"))
+    code: Mapped[Optional[str]] = mapped_column(Text)  # 6 цифр; NULL, как только сессия ушла из pending; у истёкшей pending — при следующем pass-code/создании сессии человека
+    code_attempts: Mapped[int] = mapped_column(server_default=text("0"))
+    code_delivered_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))  # телефон забрал код
     face_score: Mapped[Optional[float]] = mapped_column(REAL)
     decision: Mapped[Optional[str]] = mapped_column(Text)
     reason_code: Mapped[Optional[str]] = mapped_column(Text)

@@ -1,59 +1,45 @@
-from datetime import datetime, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, File, UploadFile
 
-from app.dependency import AdminOrManagerDep, ManagerDep
-from app.schemas.common import GroupRef, ZoneRef
-from app.schemas.site import (
-    CalibrationIn, CalibrationPoint, PlanFullOut, PlanOut, SiteNowItem, ZoneOut, ZonesIn, ZonesOut,
-)
+from app.core.exceptions import ApiError
+from app.dependency import AdminOrManagerDep, DbDep, ManagerDep
+from app.schemas.site import CalibrationIn, PlanFullOut, PlanOut, SiteNowItem, ZonesIn, ZonesOut
+from app.services import site as service
 
 router = APIRouter(tags=["site"])
 
-_PLAN = PlanOut(image_url="/files/plan/plan.png", width=1200, height=800)
-_ZONES = [ZoneOut(id=1, name="Склад", polygon=[[0, 0], [400, 0], [400, 300], [0, 300]])]
-_POINTS = [
-    CalibrationPoint(px=0, py=0, lat=55.0, lon=37.0),
-    CalibrationPoint(px=1200, py=0, lat=55.0, lon=37.01),
-    CalibrationPoint(px=0, py=800, lat=54.99, lon=37.0),
-]
+MAX_PLAN_BYTES = 15 * 1024 * 1024
 
 
 @router.get("/site/now", response_model=list[SiteNowItem])
-def site_now(user: AdminOrManagerDep):
+def site_now(db: DbDep, user: AdminOrManagerDep):
     """Кто сейчас на объекте (только открытые смены)."""
-    # STUB
-    now = datetime.now(timezone.utc)
-    return [SiteNowItem(
-        person_id=1, fio="Иванов Иван Иванович", group=GroupRef(id=1, name="Бригада А"),
-        since=now, last_seen_at=now, last_zone=ZoneRef(id=1, name="Склад"),
-    )]
+    return service.site_now(db)
 
 
 @router.put("/site/plan", response_model=PlanOut)
-def put_plan(user: ManagerDep, image: Annotated[UploadFile, File()]):
-    """Загружает план объекта (multipart, png/jpg)."""
-    # STUB
-    return _PLAN
+def put_plan(db: DbDep, user: ManagerDep, image: Annotated[UploadFile, File()]):
+    """Загружает план объекта (multipart, png/jpg, до 15 МБ)."""
+    data = image.file.read(MAX_PLAN_BYTES + 1)
+    if len(data) > MAX_PLAN_BYTES:
+        raise ApiError("PLAN_TOO_LARGE", "Файл плана слишком большой, максимум 15 МБ", 413)
+    return service.put_plan(db, user["sub"], data)
 
 
 @router.get("/site/plan", response_model=PlanFullOut)
-def get_plan(user: ManagerDep):
+def get_plan(db: DbDep, user: ManagerDep):
     """План с калибровкой и зонами."""
-    # STUB
-    return PlanFullOut(**_PLAN.model_dump(), calibration=_POINTS, zones=_ZONES)
+    return service.get_plan(db)
 
 
 @router.put("/site/calibration", response_model=CalibrationIn)
-def put_calibration(body: CalibrationIn, user: ManagerDep):
+def put_calibration(body: CalibrationIn, db: DbDep, user: ManagerDep):
     """Калибровка по трём точкам; возвращает сохранённые точки."""
-    # STUB
-    return body
+    return service.put_calibration(db, user["sub"], body)
 
 
 @router.put("/zones", response_model=ZonesOut)
-def put_zones(body: ZonesIn, user: ManagerDep):
+def put_zones(body: ZonesIn, db: DbDep, user: ManagerDep):
     """Полная замена набора зон."""
-    # STUB
-    return ZonesOut(zones=_ZONES)
+    return service.put_zones(db, user["sub"], body)
