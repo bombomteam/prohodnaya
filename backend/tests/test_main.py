@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 
-from app.errors import ApiError
+from app.core.exceptions import ApiError
 from app.main import app
 
 
