@@ -1,6 +1,6 @@
 # Интеграция фронтенда с `feature/svyat`
 
-Актуально для маршрутов и схем backend, слитого в `main` из `feature/svyat` (merge `2c66e64`). Все пути ниже имеют префикс `/api`; базовый URL задаётся `config.apiBaseUrl` либо переменной контейнера. Фронтенд хранит HTTP-адаптер в `src/api.js` и не принимает решение о проходе.
+Актуально для маршрутов и схем backend, слитого в `main` из `feature/svyat`, включая обновление модуля лиц в merge `c20b66c`. Все пути ниже имеют префикс `/api`; базовый URL задаётся `config.apiBaseUrl` либо переменной контейнера. Фронтенд хранит HTTP-адаптер в `src/api.js` и не принимает решение о проходе.
 
 ## Роли и вход
 
@@ -15,6 +15,7 @@ Backend защищает операторские маршруты Bearer JWT Ke
 
 - `GET /groups`, `POST /groups` (`name`, `parent_id`), `GET /persons`: группы и таблица; `PersonOut` содержит `fio`, `position`, `group`, `status`, `on_site`, `has_face`, `has_active_device`.
 - `POST /persons`, `PATCH /persons/{id}`: multipart с `fio`, `position`, `group_id`, `photo`; для создания фото обязательно.
+- Отказ проверки фото приходит как HTTP-ошибка `{code:"FACE_<ПРИЧИНА>",message:"Текст для человека"}`. Интерфейс показывает `message` прямо в форме сотрудника, сохраняет введённые поля и выбранный файл; код остаётся в `ApiError.code`. Недоступность модуля лиц — `503 / FACE_SERVICE_UNAVAILABLE`. Запись сотрудника при отказе проверки не создаётся.
 - `POST /persons/{id}/enroll-code`: выдаёт `code`, `enroll_url`, `expires_at`.
 - `PATCH /persons/{id}` со `status=blocked`: блокировка. Маршрута отзыва конкретного устройства пока нет.
 - `GET /events`: журнал попыток. `GET /site/now`: присутствующие; сервер пока не даёт общего количества людей и числа отказов за сегодня.
@@ -24,7 +25,7 @@ Backend защищает операторские маршруты Bearer JWT Ke
 1. `POST /passages` с `{direction:"in"|"out"}` создаёт `session_id`, `nonce`, `qr_payload`, `expires_at`.
 2. Рабочий передаёт открытый JWK через `POST /enroll` с кодом. Закрытый ECDSA P-256 ключ остаётся в IndexedDB как неизвлекаемый `CryptoKey`.
 3. Рабочий вставляет JSON из `qr_payload` (`sid`, `n`, `d`). Подпись ECDSA SHA-256 ставится на точные UTF-8 байты `session_id|nonce|direction`; raw `r||s` кодируется base64url без padding. `POST /passages/{id}/sign` принимает `device_id`, `signature`.
-4. Контролёр опрашивает `GET /passages/{id}` до `signed`, затем снимает три JPEG-кадра и отправляет их multipart под повторяющимся полем `frames` в `POST /passages/{id}/face`. Решение `allow`/`deny` приходит только от сервера.
+4. Контролёр опрашивает `GET /passages/{id}` до `signed`, затем снимает от 1 до 10 JPEG-кадров и отправляет их multipart под повторяющимся полем `frames` в `POST /passages/{id}/face`. Число кадров выбирается в интерфейсе, по умолчанию — 3. Запрос `/face`, создание и опрос сессии используют `Authorization: Bearer <access token>` оператора с ролью `controller`; подпись рабочего этот токен не заменяет. Локальный `devRole=controller` работает без токена только при серверном `AUTH_DEV_BYPASS=true`. Решение `allow`/`deny` приходит только от сервера; 401/403 показываются как ошибки сессии/прав.
 5. Рабочий отправляет `POST /locations`: `device_id`, точная JSON-строка `payload` с `ts` и `points[{ts,lat,lon,accuracy}]`, а также ECDSA-подпись точных байтов этой строки. Сервер отвечает `accepted`/`rejected`.
 
 В backend пока нет `/worker/me`, поэтому статус своей смены на телефоне неизвестен. Сервер обязан ограничивать приём геолокации открытой сменой. Не реализованы идемпотентность регистрации/прохода и восстановление ключа после сбоя ответа.

@@ -14,7 +14,7 @@ const nowDate = () => new Intl.DateTimeFormat("sv-SE", { timeZone: config.timeZo
 const state = {
   page: "overview", employees: [], groups: [], attempts: [], dashboard: null, analytics: null, shiftReport: null, personReport: null, site: null, selectedRouteId: null,
   worker: null, workerId: "", direction: "entry", challenge: null, passResult: null,
-  cameraStream: null, faceBlob: null, faceFrames: [], faceUrl: null, locationWatch: null, locationLastSent: 0,
+  cameraStream: null, faceBlob: null, faceFrames: [], faceUrl: null, captureCount: 3, employeeError: null, locationWatch: null, locationLastSent: 0,
   locationStatus: "Геолокация выключена", assistant: null, busy: false, toast: null, loadError: null, mobileMenu: false,
   filters: { from: nowDate(), to: nowDate(), hourFrom: "0", hourTo: "23", employeeIds: "" },
 };
@@ -128,7 +128,7 @@ function employees() {
     <div class="table-wrap"><table><thead><tr><th>Сотрудник</th><th>Группа / должность</th><th>Статус</th><th>Телефон</th><th></th></tr></thead><tbody>${state.employees.map(x => `<tr data-search="${esc((x.name + " " + x.company).toLowerCase())}"><td><div class="table-person"><span class="person-avatar small">${esc(initials(x.name))}</span><b>${esc(x.name)}</b></div></td><td>${esc(x.company || "—")}<br><span class="muted">${esc(x.role || "—")}</span></td><td>${x.blocked ? '<span class="badge badge-red">Заблокирован</span>' : statusBadge(x.status)}</td><td>${x.enrolled ? '<span class="badge badge-green">Привязан</span>' : '<span class="badge badge-amber">Не привязан</span>'}</td><td><button class="text-button" data-action="edit-employee" data-id="${esc(x.id)}">Изменить →</button><button class="text-button" data-action="enroll-code" data-id="${esc(x.id)}">Enroll-код</button>${config.mode === "demo" ? `<button class="text-button" data-action="revoke-device" data-id="${esc(x.id)}">Отозвать ключ</button>` : ""}<button class="text-button" data-action="deactivate" data-id="${esc(x.id)}" ${x.blocked ? "disabled" : ""}>Деактивировать</button></td></tr>`).join("")}</tbody></table></div>${!state.employees.length ? '<div class="empty">Пока нет сотрудников. Добавьте первого человека.</div>' : ""}</section>
     ${state.enrollCode ? `<div class="panel"><b>Одноразовый enroll-код</b><p>${esc(state.enrollCode.code)} · до ${dateTime(state.enrollCode.expiresAt)}</p><p>Передайте лично рабочему. Код не является пропуском.</p></div>` : ""}
     ${config.mode === "api" ? `<section class="panel"><h2>Новая группа</h2><form id="group-form" class="filters-form"><label>Название<input name="name" required></label><label>Родительская группа<select name="parentId"><option value="">Нет</option>${state.groups.map(group => `<option value="${esc(group.id)}">${esc(group.name)}</option>`).join("")}</select></label><button class="button button-outline">Добавить группу</button></form></section>` : ""}
-    <dialog id="employee-dialog" class="modal"><form id="employee-form" class="modal-form"><div class="modal-heading"><div><div class="eyebrow">АДМИНИСТРИРОВАНИЕ</div><h2 id="employee-dialog-title">Новый сотрудник</h2></div><button type="button" class="icon-button" data-action="close-dialog" aria-label="Закрыть">×</button></div><input type="hidden" name="employeeId"><label>ФИО <input name="name" required placeholder="Иванов Иван Иванович"></label><div class="form-grid">${config.mode === "api" ? `<label>Группа <select name="groupId"><option value="">Без группы</option>${state.groups.map(group => `<option value="${esc(group.id)}">${esc(group.name)}</option>`).join("")}</select></label>` : '<label>Организация <input name="company" placeholder="Название подрядчика"></label>'}<label>Должность <input name="role" placeholder="Специальность"></label></div><label class="upload-box"><span class="upload-icon">▧</span><b>Эталонное фото</b><small>Один человек в кадре, лицо видно чётко.</small><input name="referencePhoto" type="file" accept="image/jpeg,image/png,image/webp" id="photo-input"><span id="file-name" class="file-name">Выбрать файл</span></label><div class="modal-actions"><button type="button" class="button button-outline" data-action="close-dialog">Отмена</button><button class="button button-primary" type="submit">Сохранить</button></div></form></dialog>`;
+    <dialog id="employee-dialog" class="modal"><form id="employee-form" class="modal-form"><div class="modal-heading"><div><div class="eyebrow">АДМИНИСТРИРОВАНИЕ</div><h2 id="employee-dialog-title">Новый сотрудник</h2></div><button type="button" class="icon-button" data-action="close-dialog" aria-label="Закрыть">×</button></div><input type="hidden" name="employeeId"><label>ФИО <input name="name" required placeholder="Иванов Иван Иванович"></label><div class="form-grid">${config.mode === "api" ? `<label>Группа <select name="groupId"><option value="">Без группы</option>${state.groups.map(group => `<option value="${esc(group.id)}">${esc(group.name)}</option>`).join("")}</select></label>` : '<label>Организация <input name="company" placeholder="Название подрядчика"></label>'}<label>Должность <input name="role" placeholder="Специальность"></label></div><label class="upload-box"><span class="upload-icon">▧</span><b>Эталонное фото</b><small>Один человек в кадре, лицо видно чётко.</small><input name="referencePhoto" type="file" accept="image/jpeg,image/png,image/webp" id="photo-input"><span id="file-name" class="file-name">Выбрать файл</span></label>${state.employeeError ? `<div class="error-banner" role="alert">${esc(state.employeeError)}</div>` : ""}<div class="modal-actions"><button type="button" class="button button-outline" data-action="close-dialog">Отмена</button><button class="button button-primary" type="submit" ${state.busy ? "disabled" : ""}>Сохранить</button></div></form></dialog>`;
 }
 
 function gate() {
@@ -136,8 +136,8 @@ function gate() {
   const apiMode = config.mode === "api";
   return `<div class="gate-layout"><div class="gate-main"><section class="panel"><div class="step-heading"><span class="step-number">01</span><div><h2>Выберите операцию</h2><p>Начните новый запрос на проход</p></div></div><div class="segment"><button class="${state.direction === "entry" ? "selected" : ""}" data-action="direction" data-value="entry">↗ Вход на объект</button><button class="${state.direction === "exit" ? "selected" : ""}" data-action="direction" data-value="exit">↙ Выход с объекта</button></div><button class="button button-primary wide" data-action="create-challenge" ${state.busy ? "disabled" : ""}>Создать запрос</button></section>
     <section class="panel"><div class="step-heading"><span class="step-number">02</span><div><h2>Подтверждение с телефона</h2><p>${apiMode ? "Передайте рабочему QR-данные для подписи на телефоне" : "Рабочий вводит одноразовый код на своём устройстве"}</p></div></div>${c ? `<div class="challenge-box"><div><small>${apiMode ? "QR-ДАННЫЕ" : "КОД ЗАПРОСА"}</small><strong style="overflow-wrap:anywhere;font-size:${apiMode ? "0.9rem" : "inherit"}">${esc(c.code)}</strong><span>Действует до ${time(c.expiresAt)}</span></div><span class="badge ${c.status === "confirmed" ? "badge-green" : c.status === "expired" ? "badge-red" : "badge-amber"}">${c.status === "confirmed" ? "Подтверждено" : c.status === "expired" ? "Истёк" : "Ожидание телефона"}</span></div>` : '<div class="empty compact">Сначала создайте запрос.</div>'}</section>
-    <section class="panel"><div class="step-heading"><span class="step-number">03</span><div><h2>${apiMode ? "Три кадра лица" : "Снимок лица"}</h2><p>Лицо сравнивает сервер с эталонным фото</p></div></div><div class="camera-box">${state.faceUrl ? `<img src="${state.faceUrl}" alt="Снимок для проверки лица">` : '<video id="camera-video" autoplay playsinline muted></video><div class="camera-placeholder" id="camera-placeholder">Камера ещё не запущена</div>'}</div><div class="camera-actions"><button class="button button-outline" data-action="start-camera">${state.cameraStream ? "↻ Переснять" : "◉ Включить камеру"}</button><button class="button button-outline" data-action="capture" ${state.cameraStream ? "" : "disabled"}>${apiMode ? "Сделать три кадра" : "Сделать снимок"}</button></div></section>
-    <button class="button button-primary wide decision-button" data-action="decide-pass" ${c?.status === "confirmed" && (apiMode ? state.faceFrames.length === 3 : state.faceBlob) && !state.busy ? "" : "disabled"}>Отправить на проверку сервера →</button>${result ? `<div class="result-card ${result.outcome}"><strong>${result.outcome === "allowed" ? "Проход разрешён" : result.outcome === "error" ? "Ошибка проверки" : result.outcome === "pending" ? "Проверка выполняется" : "Отказ в проходе"}</strong><span>${esc(result.employeeName)} · ${dirName(result.direction)}</span><p>${esc(result.reason)}</p></div>` : ""}</div>
+    <section class="panel"><div class="step-heading"><span class="step-number">03</span><div><h2>${apiMode ? "Кадры лица" : "Снимок лица"}</h2><p>Лицо сравнивает сервер с эталонным фото</p></div></div><div class="camera-box">${state.faceUrl ? `<img src="${state.faceUrl}" alt="Снимок для проверки лица">` : '<video id="camera-video" autoplay playsinline muted></video><div class="camera-placeholder" id="camera-placeholder">Камера ещё не запущена</div>'}</div>${apiMode ? `<label class="capture-settings">Кадров в серии<select id="capture-count" ${state.busy ? "disabled" : ""}>${Array.from({ length: 10 }, (_, index) => index + 1).map(count => `<option value="${count}" ${count === state.captureCount ? "selected" : ""}>${count}</option>`).join("")}</select><small>Подготовлено кадров: ${state.faceFrames.length}</small></label>` : ""}<div class="camera-actions"><button class="button button-outline" data-action="start-camera" ${state.busy ? "disabled" : ""}>${state.cameraStream ? "↻ Переснять" : "◉ Включить камеру"}</button><button class="button button-outline" data-action="capture" ${state.cameraStream && !state.busy ? "" : "disabled"}>${apiMode ? "Снять серию" : "Сделать снимок"}</button></div></section>
+    <button class="button button-primary wide decision-button" data-action="decide-pass" ${c?.status === "confirmed" && (apiMode ? (state.faceFrames.length >= 1 && state.faceFrames.length <= 10) : state.faceBlob) && !state.busy ? "" : "disabled"}>Отправить на проверку сервера →</button>${result ? `<div class="result-card ${result.outcome}"><strong>${result.outcome === "allowed" ? "Проход разрешён" : result.outcome === "error" ? "Ошибка проверки" : result.outcome === "pending" ? "Проверка выполняется" : "Отказ в проходе"}</strong><span>${esc(result.employeeName)} · ${dirName(result.direction)}</span><p>${esc(result.reason)}</p></div>` : ""}</div>
     <aside class="gate-aside"><div class="info-card"><span class="info-symbol">⌁</span><h3>Порядок прохода</h3><ol><li>Создайте запрос на вход или выход</li><li>Попросите рабочего подтвердить код на телефоне</li><li>Сделайте снимок лица перед камерой</li><li>Дождитесь решения сервера</li></ol></div><div class="note-card"><b>Ответ принимает сервер</b><p>Фронт не вычисляет совпадение лиц и не открывает смену самостоятельно.</p></div></aside></div>`;
 }
 
@@ -256,6 +256,8 @@ root.addEventListener("click", async (event) => {
   if (action === "close-menu") { state.mobileMenu = false; render(); return; }
   if (action === "refresh") { await refresh(); return; }
   if (action === "new-employee" || action === "edit-employee") {
+    state.employeeError = null;
+    render();
     const employee = state.employees.find(x => x.id === button.dataset.id);
     const dialog = document.querySelector("#employee-dialog");
     dialog.querySelector("form").reset();
@@ -280,22 +282,24 @@ root.addEventListener("click", async (event) => {
     return;
   }
   if (action === "capture") {
-    const video = document.querySelector("#camera-video");
-    if (!video?.videoWidth) { notify("Подождите, пока камера начнёт показывать изображение.", "error"); return; }
-    const canvas = document.createElement("canvas"); canvas.width = video.videoWidth; canvas.height = video.videoHeight;
-    canvas.getContext("2d").drawImage(video, 0, 0);
-    if (config.mode === "api") {
-      state.faceFrames = [];
-      for (let i = 0; i < 3; i++) {
+    await run(async () => {
+      const video = document.querySelector("#camera-video");
+      if (!video?.videoWidth) throw new Error("Подождите, пока камера начнёт показывать изображение.");
+      const canvas = document.createElement("canvas"); canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+      const count = config.mode === "api" ? state.captureCount : 1;
+      const frames = [];
+      for (let i = 0; i < count; i++) {
         canvas.getContext("2d").drawImage(video, 0, 0);
         const frame = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", .88));
         if (!frame) throw new Error("Не удалось получить кадр с камеры.");
-        state.faceFrames.push(frame);
-        if (i < 2) await new Promise(resolve => setTimeout(resolve, 250));
+        frames.push(frame);
+        if (i < count - 1) await new Promise(resolve => setTimeout(resolve, 250));
       }
-      state.faceBlob = state.faceFrames[2];
-    } else state.faceBlob = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", .88));
-    state.faceUrl = URL.createObjectURL(state.faceBlob); stopCamera(); render(); return;
+      state.faceFrames = config.mode === "api" ? frames : [];
+      state.faceBlob = frames.at(-1);
+      if (state.faceUrl) URL.revokeObjectURL(state.faceUrl);
+      state.faceUrl = URL.createObjectURL(state.faceBlob); stopCamera();
+    }); return;
   }
   if (action === "decide-pass") {
     await run(async () => {
@@ -342,6 +346,7 @@ root.addEventListener("click", async (event) => {
 });
 
 root.addEventListener("change", (event) => {
+  if (event.target.id === "capture-count") { state.captureCount = Number(event.target.value); return; }
   if (event.target.id === "demo-role") {
     stopLocation(); clearChallenge(); state.enrollCode = null; demoRole(event.target.value);
     state.page = allowedPages()[0]; state.dashboard = null; state.worker = null; state.employees = []; state.attempts = [];
@@ -361,8 +366,11 @@ root.addEventListener("submit", async (event) => {
   if (form.id === "employee-form") {
     if (!canEdit()) { notify("Недостаточно прав", "error"); return; }
     const data = new FormData(form), employeeId = data.get("employeeId") || null;
+    state.employeeError = null;
     await run(async () => {
-      const result = await api.saveEmployee(employeeId, data);
+      let result;
+      try { result = await api.saveEmployee(employeeId, data); }
+      catch (error) { state.employeeError = errorMessage(error); return; }
       await refresh("employees");
       document.querySelector("#employee-dialog")?.close();
       notify(result.photoCheck?.message || "Данные сотрудника отправлены серверу.", "success");

@@ -125,12 +125,12 @@ export const backendApi = {
   createChallenge: async direction => mapPassage(await request("/passages", { method: "POST", body: { direction: directionToBackend(direction) } })),
   challenge: async id => mapPassage(await request(`/passages/${encodeURIComponent(id)}`)),
   async decidePass(sessionId, direction, frames) {
-    if (!Array.isArray(frames) || frames.length !== 3 || frames.some(frame => !(frame instanceof Blob) || !frame.size)) {
-      throw new ApiError("Для проверки лица нужны три кадра с камеры.");
+    if (!Array.isArray(frames) || frames.length < 1 || frames.length > 10 || frames.some(frame => !(frame instanceof Blob) || !frame.size)) {
+      throw new ApiError("Для проверки лица отправьте от 1 до 10 непустых кадров с камеры.");
     }
     const body = new FormData();
     frames.forEach((frame, index) => body.append("frames", frame, `frame-${index + 1}.jpg`));
-    const value = await request(`/passages/${encodeURIComponent(sessionId)}/face`, { method: "POST", body });
+    const value = await request(`/passages/${encodeURIComponent(sessionId)}/face`, { method: "POST", body, auth: "operator" });
     return { employeeName: value.person?.fio || "", direction, outcome: value.decision === "allow" ? "allowed" : "denied",
       reason: value.reason || (value.decision === "allow" ? "Решение получено от сервера" : "Сервер отказал в проходе"),
       reasonCode: value.reason_code || null, shiftId: value.shift?.id ?? null };
