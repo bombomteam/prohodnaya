@@ -1,0 +1,10 @@
+dist/
+docs/
+tests/
+scripts/
+node_modules/
+README.md
+package.json
+docker.env.example
+.git/
+*.log
