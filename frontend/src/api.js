@@ -1,6 +1,6 @@
 import { config } from "../config.js";
 import { accessToken, configureAuthTransport } from "./auth.js";
-import { loadDevice, saveDevice, createDevice, parsePassagePayload, signPassage, signLocations } from "./device.js";
+import { loadDevice, saveDevice, createDevice, signPassCode, signLocations } from "./device.js";
 import { demoApi } from "./demo-api.js";
 import { caseZoneById } from "./zones.js";
 
@@ -97,12 +97,13 @@ function queryFilters(filters) {
   return params;
 }
 
+// Сессия прохода: pending → ждём код, signed → код принят (можно снимать лицо), decided → решение принято.
 function mapPassage(value) {
   return {
-    id: value.session_id, code: value.qr_payload || "", nonce: value.nonce || "",
-    direction: directionToUi(value.direction), expiresAt: value.expires_at,
+    id: value.session_id, code: "", direction: directionToUi(value.direction), expiresAt: value.expires_at,
     status: ({ pending: "waiting", signed: "confirmed", decided: "used" })[value.status] || "waiting",
     personName: value.person?.fio || null, decision: value.decision || null, reason: reasonText(value, ""),
+    reasonCode: value.reason_code || null,
   };
 }
 
@@ -132,8 +133,17 @@ export const backendApi = {
     return mapPerson(await request(`/persons/${encodeURIComponent(id)}`, { method: "PATCH", body }));
   },
   attempts: async () => (await request("/events?limit=200")).map(mapEvent),
-  createChallenge: async direction => mapPassage(await request("/passages", { method: "POST", body: { direction: directionToBackend(direction) } })),
+  // Контролёр: поиск человека по ФИО (GET /passages/people), сессия на человека, ввод 6-значного кода рабочего.
+  gatePeople: async query => (await request(`/passages/people?${new URLSearchParams({ ...(query ? { q: query } : {}), limit: "50" })}`)).map(mapPerson),
+  createChallenge: async (direction, personId) => mapPassage(await request("/passages", { method: "POST",
+    body: { person_id: Number(personId), direction: directionToBackend(direction) } })),
   challenge: async id => mapPassage(await request(`/passages/${encodeURIComponent(id)}`)),
+  async verifyCode(sessionId, code) {
+    const value = await request(`/passages/${encodeURIComponent(sessionId)}/code`, { method: "POST", body: { code } });
+    // Неверный код: HTTP 200, сессия остаётся pending, причина в reason (decision не выставлен).
+    if (value.status === "pending" && value.reason_code) throw new ApiError(reasonText(value, "Код не совпадает"), 200, value.reason_code);
+    return mapPassage(value);
+  },
   async decidePass(sessionId, direction, frames) {
     if (!Array.isArray(frames) || frames.length < 1 || frames.length > 10 || frames.some(frame => !(frame instanceof Blob) || !frame.size)) {
       throw new ApiError("Для проверки лица отправьте от 1 до 10 непустых кадров с камеры.");
@@ -159,18 +169,16 @@ export const backendApi = {
     await saveDevice({ ...device, deviceId: value.device_id, person: value.person });
     return { employee: { id: String(value.person.id), name: value.person.fio, enrolled: true, status: null } };
   },
-  passOptions: raw => {
-    const value = parsePassagePayload(raw);
-    return { challengeId: value.sessionId, direction: directionToUi(value.direction), nonce: value.nonce, backendDirection: value.direction };
-  },
-  async confirmPass(challengeId, options) {
+  // Телефон: подписанный ключом устройства запрос кода ждущего прохода. null — контролёр ещё не создал проход.
+  async workerPassCode() {
     const device = await loadDevice();
     if (!device?.deviceId) throw new ApiError("Сначала привяжите телефон по коду администратора.");
-    const signature = await signPassage(device, { sessionId: challengeId, nonce: options.nonce, direction: options.backendDirection });
-    const value = await request(`/passages/${encodeURIComponent(challengeId)}/sign`, {
-      method: "POST", body: { device_id: device.deviceId, signature }, auth: "none",
-    });
-    return { status: value.status, employeeName: value.person?.fio || "" };
+    const ts = new Date().toISOString();
+    const signature = await signPassCode(device, ts);
+    const value = await request("/device/pass-code", { method: "POST", body: { device_id: device.deviceId, ts, signature }, auth: "none" });
+    if (!value.pending) return null;
+    return { id: value.session_id, direction: directionToUi(value.direction), code: value.code, expiresAt: value.expires_at,
+      personName: device.person?.fio || "" };
   },
   async sendLocation(_shiftId, position) {
     const device = await loadDevice();

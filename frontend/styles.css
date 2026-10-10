@@ -102,3 +102,4 @@
 .camera-box video,.camera-box img{transform:none}
 @media(max-width:760px){.case-zone-map{padding:0 14px 14px;gap:7px}.case-zone-card{min-height:105px;padding:10px}.case-zone-card b{font-size:11px}.case-zone-card small{font-size:9px}.site-plan{margin:0 14px 14px}.route-detail{padding:16px 14px}}
 @media(max-width:420px){.case-zone-map{grid-template-columns:1fr}.case-zone-card{min-height:0}.route-timeline li{display:grid;gap:3px}}
+.hint-line{margin:6px 0 12px;font-size:12px;line-height:1.45;color:#4b625d}

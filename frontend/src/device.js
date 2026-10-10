@@ -1,4 +1,4 @@
-// The backend signs passage QR data and location payloads with ECDSA P-256.
+// Телефон подписывает запрос кода прохода и пакеты координат ECDSA P-256 (неизвлекаемый ключ).
 const encoder = new TextEncoder();
 
 export function base64url(bytes) {
@@ -39,18 +39,8 @@ export async function createDevice() {
   return { privateKey: keys.privateKey, publicKey: await crypto.subtle.exportKey("jwk", keys.publicKey) };
 }
 
-export function parsePassagePayload(value) {
-  let payload;
-  try { payload = JSON.parse(String(value || "").trim()); } catch { throw new Error("Вставьте QR-данные прохода в формате JSON."); }
-  if (!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(payload?.sid || "") ||
-      typeof payload.n !== "string" || !payload.n || !["in", "out"].includes(payload.d)) {
-    throw new Error("QR-данные неполные или повреждены. Создайте новый запрос на проходной.");
-  }
-  return { sessionId: payload.sid, nonce: payload.n, direction: payload.d };
-}
-
-export function passageBytes({ sessionId, nonce, direction }) {
-  return encoder.encode(`${sessionId}|${nonce}|${direction}`);
+export function passCodeBytes(deviceId, ts) {
+  return encoder.encode(`pass-code|${deviceId}|${ts}`);
 }
 
 async function sign(device, bytes) {
@@ -60,5 +50,6 @@ async function sign(device, bytes) {
   return base64url(signature); // WebCrypto returns raw r||s (64 bytes) for P-256.
 }
 
-export function signPassage(device, payload) { return sign(device, passageBytes(payload)); }
+// POST /device/pass-code: подпись строки "pass-code|<device_id>|<ts>" той же парой ключей, что при привязке.
+export function signPassCode(device, ts) { return sign(device, passCodeBytes(device.deviceId, ts)); }
 export function signLocations(device, payload) { return sign(device, encoder.encode(payload)); }
