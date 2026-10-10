@@ -52,7 +52,7 @@
 - `face_mismatch`;
 - `spoof_suspected`, `frame_is_reference`, `frame_replayed`;
 - `no_frames`, `camera_unavailable`;
-- `bad_image`, `unsupported_format`, `too_large`;
+- `bad_request`, `bad_image`, `unsupported_format`, `too_large`;
 - `reference_outdated`, `internal_error`.
 
 ## `GET /v1/health`
@@ -138,14 +138,22 @@
 
 `multipart/form-data`:
 
-- `request` — JSON как в `verify/camera`, но без `camera_id`, `since`, `until`, `wait_ms`;
-- `frames` — 1–10 файлов JPEG/PNG/WEBP по порядку съёмки.
+- `request` — **текстовое поле формы** (не файл) со строкой JSON, как в `verify/camera`, но без `camera_id`, `since`, `until`, `wait_ms`. Если `request` пришёл файлом, отсутствует или не разбирается как JSON → `400` с кодом `bad_request`;
+- `frames` — 1–10 файлов JPEG/PNG/WEBP по порядку съёмки (повторяющееся поле `frames`).
+
+Пример (curl):
+
+```bash
+curl -F 'request={"attempt_id":"5d1c…","reference":{"embedding":"…","model_version":"face-v1:scrfd10g+glintr100","reference_hash":"…"}}' \
+     -F frames=@f1.jpg -F frames=@f2.jpg -F frames=@f3.jpg http://face:8000/v1/verify/frames
+```
 
 Совместим со старым полем `faceImage`: бэкенд кладёт его как единственный кадр.
 
 Отличия от видео:
 
-- «живость» по нескольким кадрам считается, только если кадров ≥ 4; иначе работает лишь пассивный антиспуфинг;
+- «живость» по нескольким кадрам считается при **≥ 3 кадрах** (фронт шлёт 3). При 1–2 кадрах работает только пассивный антиспуфинг;
+- кадры должны быть **сняты с интервалом 250–300 мс**: три разных кадра видео за ~0,6 с, а не три копии одного момента. Иначе кадры почти одинаковы, «живость» по ним не судит (`sequence: null`) и остаётся только пассивная проверка. Отказом это не будет. Больше кадров (5) — лучше, но не обязательно;
 - проверки «кадр = эталон» и «повтор кадра» обязательны.
 
 ## Ответ `verify/camera` и `verify/frames`
