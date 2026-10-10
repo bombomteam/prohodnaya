@@ -2,6 +2,8 @@
 
 ## GitHub Pages
 
+Публичный адрес актуальной версии из `main`: https://bombomteam.github.io/prohodnaya/.
+
 Workflow [`.github/workflows/pages.yml`](../../.github/workflows/pages.yml) запускается при push в `main` и вручную. Он выполняет тесты, собирает статический артефакт и публикует его через GitHub Pages. Сборка находится в `frontend/scripts/build-pages.mjs` и копирует только `index.html`, `styles.css`, `config.js` и четыре JS-модуля из `src/`. Фотографии и документы кейса не входят в Pages-артефакт.
 
 Проверить артефакт локально:
