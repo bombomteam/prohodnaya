@@ -4,6 +4,9 @@
 #   cp .env.example .env        # при необходимости поправить значения
 #   docker compose up -d --build
 #
+# db и backend входят в профиль backend (COMPOSE_PROFILES=backend в .env.example).
+# Чтобы поднять только frontend, уберите COMPOSE_PROFILES из .env.
+#
 # Все настройки — через .env (см. .env.example). Секреты в этот файл не пишутся.
 
 name: prohodnaya
