@@ -22,3 +22,5 @@ python -m http.server 8080
 ```
 
 Откройте `http://localhost:8080`. Полные инструкции — в [`frontend/docs/launch.md`](frontend/docs/launch.md).
+
+Для контейнера: `docker build -t prohodnaya-frontend:local ./frontend`. Запуск и подключение API описаны в [`frontend/docs/deployment.md`](frontend/docs/deployment.md).

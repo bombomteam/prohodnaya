@@ -6,6 +6,8 @@
 
 Документация: [запуск](docs/launch.md), [архитектура](docs/architecture.md), [API-контракт](docs/frontend-api.md), [решения](docs/decisions.md), [ограничения](docs/limitations.md), [использование ИИ](docs/ai-usage.md), [деплой](docs/deployment.md).
 
+Docker: из корня репозитория выполните `docker build -t prohodnaya-frontend:local ./frontend`, затем `docker run --rm -p 8080:8080 prohodnaya-frontend:local`. Параметры для подключения API и HTTPS описаны в [инструкции по деплою](docs/deployment.md).
+
 ## Быстрый запуск фронтенда
 
 Нужен Python 3. Из папки `frontend`:
