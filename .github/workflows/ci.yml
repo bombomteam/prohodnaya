@@ -141,7 +141,7 @@ jobs:
           curl --retry 10 --retry-delay 1 --retry-all-errors -fsS http://127.0.0.1:18080/healthz
           curl -fsS 'http://127.0.0.1:18080/enroll?code=ci-code' | grep -F 'id="app"'
           curl -fsS http://127.0.0.1:18080/src/app.js -o /dev/null
-          test "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/enroll/)" = 302
+          curl -fsS 'http://127.0.0.1:18080/enroll/?code=ci-code' | grep -F 'id="app"'
           test "$(curl -sS -X POST -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/enroll)" = 403
 
   backend:
