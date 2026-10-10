@@ -26,7 +26,7 @@ log = logging.getLogger(__name__)
 _PROMPTS = Path(__file__).parent / "prompts"
 
 NO_DATA_INSIDE = "Данных нет: на объекте сейчас никого нет (открытых смен нет)."
-NO_DATA_SUMMARY = "Данных нет: за период {a} — {b} не было ни смен, ни отказов в проходе."
+NO_DATA_SUMMARY = "Данных нет: за {period} не было ни смен, ни отказов в проходе."
 NOT_UNDERSTOOD = (
     "Данных для такого вопроса нет: я отвечаю на вопросы «кто сейчас на объекте», «сводка за день», "
     "«кто вчера отработал меньше N часов», «в какой зоне больше всего людей» и «отказы за неделю и причины»."
@@ -36,7 +36,7 @@ MODEL_BAD = "Ответ модели не прошёл проверку чисе
 
 NO_DATA_LESS = "Данных нет: за {day} нет людей, отработавших меньше {n} ч (либо смен в этот день не было)."
 NO_DATA_ZONES = "Данных нет: за {day} в зонах не было ни людей, ни времени."
-NO_DATA_DENIALS = "Данных нет: за период {a} — {b} отказов в проходе не было."
+NO_DATA_DENIALS = "Данных нет: за {period} отказов в проходе не было."
 DEFAULT_LIMIT_HOURS = 8
 MAX_LIMIT_HOURS = 24
 
@@ -70,6 +70,75 @@ def _today() -> date:
     return datetime.now(ZoneInfo(settings.site_tz)).date()
 
 
+def _ru_date(day: date | str) -> str:
+    """Дата по-русски: 09.10.2026 (ISO-запись пользователю и модели не показываем)."""
+    return (date.fromisoformat(day) if isinstance(day, str) else day).strftime("%d.%m.%Y")
+
+
+def _ru_period(date_from: date | str, date_to: date | str) -> str:
+    """Период по-русски: «04.10–10.10.2026» (один год), «31.12.2025–02.01.2026», один день — «10.10.2026»."""
+    a, b = (date.fromisoformat(x) if isinstance(x, str) else x for x in (date_from, date_to))
+    if a == b:
+        return _ru_date(a)
+    return (a.strftime("%d.%m") if a.year == b.year else _ru_date(a)) + "–" + _ru_date(b)
+
+
+# Общие русские формулировки причин без динамических частей (счётчик попыток и т. п.): группировка и показ идут
+# по reason_code, а подпись берётся отсюда; для кодов вне справочника — текст причины из журнала.
+_DYNAMIC_REASONS = {"CODE_INVALID"}  # в тексте журнала вшит счётчик «Осталось попыток: N»
+_OTHER_REASON = "Другая причина"
+REASON_LABELS = {
+    "CODE_INVALID": "Неверный код с телефона",
+    "CODE_ATTEMPTS_EXCEEDED": "Код введён неверно слишком много раз",
+    "SESSION_EXPIRED": "Сессия прохода устарела или уже использована",
+    "SESSION_REPLACED": "Проход начат заново",
+    "SESSION_FOREIGN": "Сессия прохода создана другим контролёром",
+    "DEVICE_INVALID": "Телефон не подтверждён",
+    "REPLAYED": "Повторный запрос",
+    "STALE_REQUEST": "Время на телефоне расходится с сервером",
+    "PERSON_BLOCKED": "Доступ заблокирован администратором",
+    "ALREADY_ON_SITE": "Человек уже на объекте",
+    "NO_OPEN_SHIFT": "Нет открытой смены",
+    "NO_FACE_TEMPLATE": "Нет эталонного фото",
+    "NO_ACTIVE_DEVICE": "Нет активированного телефона",
+    "FACE_SERVICE_UNAVAILABLE": "Сервис распознавания недоступен",
+    "FACE_TOO_LARGE": "Файл слишком большой",
+    "FACE_NO_FACE": "Лицо не найдено",
+    "FACE_MULTIPLE_PEOPLE": "В кадре несколько человек",
+    "FACE_MULTIPLE_FACES": "В кадре несколько лиц",
+    "FACE_FACE_COVERED": "Лицо закрыто",
+    "FACE_TURN_TO_CAMERA": "Лицо повёрнуто от камеры",
+    "FACE_TOO_SMALL": "Лицо слишком маленькое",
+    "FACE_LOW_QUALITY": "Кадр нечёткий или тёмный",
+    "FACE_FACE_MISMATCH": "Лицо не совпадает с эталоном",
+    "FACE_SPOOF_SUSPECTED": "Не подтверждено, что перед камерой живой человек",
+    "FACE_FRAME_IS_REFERENCE": "Кадр совпадает с фото эталона",
+    "FACE_FRAME_REPLAYED": "Кадр уже присылали",
+    "FACE_NO_FRAMES": "Нет видео с камеры",
+    "FACE_CAMERA_UNAVAILABLE": "Камера проходной недоступна",
+    "FACE_REFERENCE_OUTDATED": "Эталон устарел",
+    "FACE_INTERNAL_ERROR": "Сбой проверки лица",
+}
+
+
+def _reason_label(code: str | None, text: str | None = None) -> str:
+    """Русская подпись причины отказа без кода: для кодов с динамическим текстом — общая формулировка,
+    иначе текст причины из журнала, затем справочник, иначе «Другая причина»."""
+    code = code or "UNKNOWN"
+    if code in _DYNAMIC_REASONS:
+        return REASON_LABELS[code]
+    return text or REASON_LABELS.get(code) or _OTHER_REASON
+
+
+def _counts_by_label(by_code: dict) -> dict[str, int]:
+    """{код: число} -> {русская подпись: число}; одинаковые подписи суммируются."""
+    out: dict[str, int] = {}
+    for code, n in by_code.items():
+        label = _reason_label(code)
+        out[label] = out.get(label, 0) + n
+    return out
+
+
 def _facts_json(facts: dict) -> str:
     """Все факты как JSON: по нему проверяются числа ответа модели."""
     return json.dumps(facts, ensure_ascii=False, default=str, indent=1)
@@ -78,6 +147,8 @@ def _facts_json(facts: dict) -> str:
 # Что модели не показываем (шум и повод для выдумок), хотя в ответе API и в проверке чисел оно остаётся.
 _HIDDEN = {"person_id", "id", "zone_id", "last_seen_at", "minutes", "worked_minutes"}
 _ISO_DT = re.compile(r"\d{4}-\d\d-\d\d[T ]\d\d:\d\d.*")
+_ISO_DATE = re.compile(r"\d{4}-\d\d-\d\d")
+_DATE_KEYS = {"date", "date_from", "date_to"}
 # Подписи полей для модели: иначе технические ключи (total, recent, count) попадают в текст ответа.
 _LABELS = {
     "count": "количество", "people": "люди", "fio": "ФИО", "group": "группа", "since": "на объекте с",
@@ -87,7 +158,7 @@ _LABELS = {
     "date_from": "период с", "date_to": "период по", "total": "всего отказов", "by_reason": "отказы по причинам",
     "reason": "причина", "recent": "последние отказы", "ts": "время", "summary": "сводка",
     "shifts_count": "смен", "worked_hours": "отработано часов", "denials_total": "отказов в проходе",
-    "denials_by_reason": "отказы по кодам причин", "open_shifts_without_exit": "открытые смены без выхода",
+    "denials_by_reason": "отказы по причинам", "open_shifts_without_exit": "открытые смены без выхода",
 }
 
 
@@ -114,13 +185,17 @@ def _human_time(moment: datetime, time_only: bool = False) -> str:
 def _model_view(value, key: str = "", hide: frozenset = frozenset()):
     """Факты в виде для модели: русские подписи вместо ключей, без пустых значений, id и сырых минут;
     дата-время в часовом поясе объекта: «с» как ЧЧ:ММ, остальное как ДД.ММ ЧЧ:ММ. hide — ключи исходных фактов, которые скрыть."""
+    if key == "denials_by_reason" and isinstance(value, dict):  # коды причин модели и пользователю не показываем
+        return _counts_by_label(value)
     if isinstance(value, dict):
-        if "reason_code" in value:  # причина без русского названия — показываем код, ключ reason_code не выдаём
-            value = {**value, "reason": value.get("reason") or value["reason_code"]}
+        if "reason_code" in value:  # причина всегда по-русски, сам код и ключ reason_code не выдаём
+            value = {**value, "reason": _reason_label(value["reason_code"], value.get("reason"))}
         return {_LABELS.get(k, k): _model_view(v, k, hide) for k, v in value.items()
                 if v is not None and k not in _HIDDEN and k not in hide and k != "reason_code"}
     if isinstance(value, list):
         return [_model_view(x, key, hide) for x in value]
+    if key in _DATE_KEYS and isinstance(value, str) and _ISO_DATE.fullmatch(value):
+        return _ru_date(value)
     moment = _parse_dt(value)
     return _human_time(moment, key == "since") if moment else value
 
@@ -208,10 +283,11 @@ def _summary_text(facts: dict) -> str:
     """Ответ только из фактов системы: сводка за период."""
     s = facts["summary"]
     lines = [
-        f"Период {s['date_from']} — {s['date_to']}.",
+        f"Период {_ru_period(s['date_from'], s['date_to'])}.",
         f"Людей: {s['people_count']}, смен: {s['shifts_count']}, отработано часов: {s['worked_hours']}.",
         f"Отказов в проходе: {s['denials_total']}"
-        + (" (" + ", ".join(f"{k}: {v}" for k, v in s["denials_by_reason"].items()) + ")" if s["denials_by_reason"] else "")
+        + (" (" + ", ".join(f"{k}: {v}" for k, v in _counts_by_label(s["denials_by_reason"]).items()) + ")"
+           if s["denials_by_reason"] else "")
         + ".",
     ]
     if s["open_shifts_without_exit"]:
@@ -271,11 +347,11 @@ async def _less(question: str, facts_provider) -> AssistantAnswer:
                "worked": _hours_text(float(r["worked_minutes"]))} for r in rows]
     facts = {"date": day.isoformat(), "limit_hours": limit, "count": len(people), "people": people}
     if not people:
-        return AssistantAnswer(status="no_data", text=NO_DATA_LESS.format(day=day.isoformat(), n=limit), facts_used=facts)
-    lines = [f"За {day.isoformat()} отработали меньше {limit} ч: {len(people)}."]
+        return AssistantAnswer(status="no_data", text=NO_DATA_LESS.format(day=_ru_date(day), n=limit), facts_used=facts)
+    lines = [f"За {_ru_date(day)} отработали меньше {limit} ч: {len(people)}."]
     lines += [f"- {p['fio']}: {p['worked']}" for p in people]
     required = [[p["fio"].split()[0]] for p in people if p.get("fio")]
-    values = {"question": question, "day": day.isoformat(), "limit": str(limit)}
+    values = {"question": question, "day": _ru_date(day), "limit": str(limit)}
     return await _formulate("less_hours", values, facts, "\n".join(lines), required)
 
 
@@ -289,10 +365,10 @@ async def _zones(question: str, facts_provider) -> AssistantAnswer:
     zones.sort(key=lambda z: (-z["minutes"], -z["people_count"]))
     facts = {"date": day.isoformat(), "zones": zones}
     if not zones:
-        return AssistantAnswer(status="no_data", text=NO_DATA_ZONES.format(day=day.isoformat()), facts_used=facts)
+        return AssistantAnswer(status="no_data", text=NO_DATA_ZONES.format(day=_ru_date(day)), facts_used=facts)
     facts["top_by_time"] = zones[0]["name"]
     facts["top_by_people"] = max(zones, key=lambda z: z["people_count"])["name"]
-    lines = [f"Зоны за {day.isoformat()}: больше всего времени — {facts['top_by_time']}, "
+    lines = [f"Зоны за {_ru_date(day)}: больше всего времени — {facts['top_by_time']}, "
              f"больше всего людей — {facts['top_by_people']}."]
     lines += [f"- {z['name']}: {z['time']}, людей: {z['people_count']}" for z in zones]
     required = [[facts["top_by_time"]], [facts["top_by_people"]]]
@@ -305,19 +381,21 @@ async def _denials(question: str, facts_provider) -> AssistantAnswer:
     date_from = date_to - timedelta(days=6)
     rows = await asyncio.to_thread(facts_provider.denials, date_from, date_to)
     by_reason: dict[str, dict] = {}
-    for r in rows:
-        item = by_reason.setdefault(r["reason_code"], {"reason_code": r["reason_code"], "reason": r.get("reason"), "count": 0})
+    for r in rows:  # группировка по коду причины; подпись без динамических частей («Осталось попыток: N»)
+        code = r["reason_code"] or "UNKNOWN"
+        item = by_reason.setdefault(code, {"reason_code": code, "reason": _reason_label(code, r.get("reason")), "count": 0})
         item["count"] += 1
     reasons = sorted(by_reason.values(), key=lambda x: -x["count"])
-    recent = [{"ts": r["ts"], "fio": r.get("fio"), "reason": r.get("reason") or r["reason_code"]} for r in rows[:5]]
+    recent = [{"ts": r["ts"], "fio": r.get("fio"), "reason": _reason_label(r["reason_code"], r.get("reason"))}
+              for r in rows[:5]]
     facts = {"date_from": date_from.isoformat(), "date_to": date_to.isoformat(), "total": len(rows),
              "by_reason": reasons, "recent": recent}
+    period = _ru_period(date_from, date_to)
     if not rows:
-        return AssistantAnswer(status="no_data", text=NO_DATA_DENIALS.format(a=facts["date_from"], b=facts["date_to"]),
-                               facts_used=facts)
-    lines = [f"Отказов в проходе за {facts['date_from']} — {facts['date_to']}: {len(rows)}."]
-    lines += [f"- {x['reason'] or x['reason_code']} ({x['reason_code']}): {x['count']}" for x in reasons]
-    required = [[x["reason"] or "", x["reason_code"]] for x in reasons]
+        return AssistantAnswer(status="no_data", text=NO_DATA_DENIALS.format(period=period), facts_used=facts)
+    lines = [f"Отказов в проходе за {period}: {len(rows)}."]
+    lines += [f"- {x['reason']}: {x['count']}" for x in reasons]
+    required = [[x["reason"]] for x in reasons]
     if _RECENT.search(question):  # конкретные отказы называем, только если спросили «кто/когда»
         hide, extra = frozenset(), "Затем назови отказы из списка «последние отказы» по одному: время, ФИО, причина."
     else:
@@ -350,8 +428,8 @@ async def summary(date_from: date, date_to: date, facts_provider, question: str 
     data = await asyncio.to_thread(facts_provider.period_summary, date_from, date_to)
     facts = {"summary": data}
     if not (data["people_count"] or data["shifts_count"] or data["denials_total"] or data["open_shifts_without_exit"]):
-        text = NO_DATA_SUMMARY.format(a=date_from.isoformat(), b=date_to.isoformat())
+        text = NO_DATA_SUMMARY.format(period=_ru_period(date_from, date_to))
         return _stamped(AssistantAnswer(status="no_data", text=text, facts_used=facts))
-    values = {"question": question, "date_from": date_from.isoformat(), "date_to": date_to.isoformat()}
+    values = {"question": question, "period": _ru_period(date_from, date_to)}
     required = [[x["fio"].split()[0]] for x in data["open_shifts_without_exit"] if x.get("fio")]
     return _stamped(await _formulate("summary", values, facts, _summary_text(facts), required))

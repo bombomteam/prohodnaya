@@ -112,7 +112,8 @@ async def test_model_unavailable_returns_system_facts(monkeypatch):
     a = await llm.summary(date(2026, 10, 10), date(2026, 10, 10), Facts())
     assert a.status == "unavailable"
     assert "недоступна" in a.text
-    assert "смен: 8" in a.text and "41.5" in a.text and "FACE_NO_FACE: 2" in a.text
+    assert "смен: 8" in a.text and "41.5" in a.text and "Лицо не найдено: 2" in a.text
+    assert "FACE_NO_FACE" not in a.text and "2026-10-10" not in a.text and "10.10.2026" in a.text
     assert a.facts_used == {"summary": SUMMARY}
 
 
@@ -292,7 +293,7 @@ async def test_denials_no_data_and_unavailable_fallback(monkeypatch, requests_se
              "reason_code": "CODE_WRONG", "reason": "Неверный код"}]
     monkeypatch.setattr(client, "_transport", _transport(lambda r: httpx.Response(503)))
     a = await llm.ask("отказы за неделю", MoreFacts(denials=rows))
-    assert a.status == "unavailable" and "CODE_WRONG" in a.text and "1" in a.text
+    assert a.status == "unavailable" and "Неверный код: 1" in a.text and "CODE_WRONG" not in a.text
 
 
 async def test_old_intents_still_routed(monkeypatch, requests_seen):
@@ -314,7 +315,7 @@ async def test_facts_for_model_have_russian_labels_not_json_keys(monkeypatch, re
              "reason_code": "FACE_NO_FACE", "reason": "Лицо не найдено"},
             {"id": 2, "ts": "2026-10-09T11:00:00+03:00", "person_id": 1, "fio": "Иванов Иван", "direction": "in",
              "reason_code": "CODE_WRONG", "reason": None}]
-    monkeypatch.setattr(client, "_transport", _answering("Всего отказов 2: Лицо не найдено — 1, CODE_WRONG — 1.", requests_seen))
+    monkeypatch.setattr(client, "_transport", _answering("Всего отказов 2: Лицо не найдено — 1, Другая причина — 1.", requests_seen))
     a = await llm.ask("Отказы за неделю и причины", MoreFacts(denials=rows))
     assert a.status == "ok"
     body = _user_body(requests_seen)
@@ -416,3 +417,95 @@ async def test_fallback_text_shows_human_local_time(monkeypatch, requests_seen):
     monkeypatch.setattr(client, "_transport", _transport(lambda r: httpx.Response(503)))
     a = await llm.ask("кто на объекте", Facts(people=people))
     assert a.status == "unavailable" and "с 08:05" in a.text and "123456" not in a.text and "+00:00" not in a.text
+
+
+# ---- русские даты, причины без кодов, группировка отказов по коду ----
+
+def _deny_row(i, code, reason, ts="2026-10-09T10:00:00+03:00"):
+    return {"id": i, "ts": ts, "person_id": 1, "fio": "Иванов Иван", "direction": "in",
+            "reason_code": code, "reason": reason}
+
+
+async def test_dates_are_russian_in_facts_and_fallbacks(monkeypatch, requests_seen):
+    """ISO-дат нет ни в фактах для модели, ни в запасных текстах; число-проверка принимает 09.10.2026 и «04.10–10.10.2026»."""
+    monkeypatch.setattr(llm, "_today", lambda: date(2026, 10, 10))
+    iso = ("2026-10-09", "2026-10-10", "2026-10-04")
+    # нет данных
+    for question, facts in (("Кто вчера отработал меньше 8 часов?", MoreFacts()), ("отказы за неделю", MoreFacts()),
+                            ("В какой зоне больше всего людей?", MoreFacts())):
+        a = await llm.ask(question, facts)
+        assert a.status == "no_data" and not any(x in a.text for x in iso), a.text
+    a = await llm.ask("Кто вчера отработал меньше 8 часов?", MoreFacts())
+    assert "09.10.2026" in a.text
+    a = await llm.ask("отказы за неделю", MoreFacts())
+    assert "04.10–10.10.2026" in a.text
+    a = await llm.summary(date(2026, 10, 4), date(2026, 10, 10), Facts(summary=EMPTY_SUMMARY))
+    assert a.status == "no_data" and "04.10–10.10.2026" in a.text and "2026-10" not in a.text
+    # факты для модели и запасной текст
+    less = [{"person_id": 1, "fio": "Петров Пётр", "worked_minutes": 390.0}]
+    monkeypatch.setattr(client, "_transport", _answering("За 09.10.2026 меньше 8 ч: Петров Пётр, 6 ч 30 мин.", requests_seen))
+    a = await llm.ask("Кто вчера отработал меньше 8 часов?", MoreFacts(less=less))
+    assert a.status == "ok", a.text  # дата в русском формате проходит проверку чисел
+    body = _user_body(requests_seen)
+    assert "09.10.2026" in body and "2026-10-09" not in body
+    assert a.facts_used["date"] == "2026-10-09"  # в API факты как есть
+    monkeypatch.setattr(client, "_transport", _answering("За 04.10–10.10.2026 был 1 отказ: Лицо не найдено.", requests_seen))
+    a = await llm.ask("отказы за неделю", MoreFacts(denials=[_deny_row(1, "FACE_NO_FACE", "Лицо не найдено")]))
+    assert a.status == "ok", a.text
+    body = json.loads(requests_seen[-1].content)["messages"][1]["content"]
+    assert "04.10.2026" in body and "10.10.2026" in body and "2026-10" not in body
+    monkeypatch.setattr(client, "_transport", _transport(lambda r: httpx.Response(503)))
+    a = await llm.ask("отказы за неделю", MoreFacts(denials=[_deny_row(1, "FACE_NO_FACE", "Лицо не найдено")]))
+    assert a.status == "unavailable" and "04.10–10.10.2026" in a.text and "2026-10" not in a.text
+    a = await llm.ask("Кто вчера отработал меньше 8 часов?", MoreFacts(less=less))
+    assert "За 09.10.2026" in a.text and "2026-10" not in a.text
+    a = await llm.ask("В какой зоне больше всего людей?",
+                      MoreFacts(zones=[{"zone_id": 1, "name": "Котлован", "minutes": 60.0, "people_count": 1}]))
+    assert "10.10.2026" in a.text and "2026-10" not in a.text
+
+
+async def test_summary_reasons_are_russian_without_codes(monkeypatch, requests_seen):
+    """В сводке и в запасном ответе «модель недоступна» причины русские, коды не показываются."""
+    summary = {**SUMMARY, "denials_total": 9,
+               "denials_by_reason": {"FACE_SPOOF_SUSPECTED": 5, "CODE_INVALID": 4}}
+    monkeypatch.setattr(client, "_transport", _transport(lambda r: httpx.Response(503)))
+    a = await llm.summary(date(2026, 10, 10), date(2026, 10, 10), Facts(summary=summary))
+    assert a.status == "unavailable"
+    assert "Не подтверждено, что перед камерой живой человек: 5" in a.text and "Неверный код с телефона: 4" in a.text
+    assert "FACE_SPOOF_SUSPECTED" not in a.text and "CODE_INVALID" not in a.text
+    assert a.facts_used["summary"]["denials_by_reason"] == {"FACE_SPOOF_SUSPECTED": 5, "CODE_INVALID": 4}
+    monkeypatch.setattr(client, "_transport", _answering(
+        "Отказов 9: Неверный код с телефона — 4, Не подтверждено, что перед камерой живой человек — 5.", requests_seen))
+    a = await llm.summary(date(2026, 10, 10), date(2026, 10, 10), Facts(summary=summary))
+    assert a.status == "ok", a.text
+    body = _user_body(requests_seen)
+    assert "Неверный код с телефона" in body and "FACE_SPOOF_SUSPECTED" not in body and "CODE_INVALID" not in body
+    # неизвестный код не светится
+    odd = {**SUMMARY, "denials_total": 1, "denials_by_reason": {"SOMETHING_NEW": 1}}
+    monkeypatch.setattr(client, "_transport", _transport(lambda r: httpx.Response(503)))
+    a = await llm.summary(date(2026, 10, 10), date(2026, 10, 10), Facts(summary=odd))
+    assert "SOMETHING_NEW" not in a.text and "Другая причина: 1" in a.text
+
+
+async def test_denials_grouped_by_code_not_by_message_with_counter(monkeypatch, requests_seen):
+    """«Код не совпадает. Осталось попыток: N» — одна причина по коду, подпись общая, затем «: N»."""
+    monkeypatch.setattr(llm, "_today", lambda: date(2026, 10, 10))
+    rows = [_deny_row(1, "CODE_INVALID", "Код не совпадает. Осталось попыток: 3"),
+            _deny_row(2, "CODE_INVALID", "Код не совпадает. Осталось попыток: 2"),
+            _deny_row(3, "CODE_INVALID", "Код не совпадает. Осталось попыток: 1"),
+            _deny_row(4, "FACE_NO_FACE", "Лицо не найдено")]
+    monkeypatch.setattr(client, "_transport", _transport(lambda r: httpx.Response(503)))
+    a = await llm.ask("отказы за неделю", MoreFacts(denials=rows))
+    assert a.status == "unavailable"
+    assert a.facts_used["by_reason"] == [
+        {"reason_code": "CODE_INVALID", "reason": "Неверный код с телефона", "count": 3},
+        {"reason_code": "FACE_NO_FACE", "reason": "Лицо не найдено", "count": 1}]
+    assert "- Неверный код с телефона: 3" in a.text and "- Лицо не найдено: 1" in a.text
+    assert "CODE_INVALID" not in a.text and "Осталось попыток" not in a.text
+    # и для модели, включая последние отказы
+    monkeypatch.setattr(client, "_transport", _answering(
+        "Всего 4: Неверный код с телефона — 3, Лицо не найдено — 1.", requests_seen))
+    a = await llm.ask("Кто получил отказ за неделю?", MoreFacts(denials=rows))
+    assert a.status == "ok", a.text
+    body = _user_body(requests_seen)
+    assert "Осталось попыток" not in body and "CODE_INVALID" not in body and body.count("Неверный код с телефона") >= 2
