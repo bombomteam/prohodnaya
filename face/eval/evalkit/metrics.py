@@ -6,7 +6,7 @@ from collections import Counter
 
 import numpy as np
 
-from .labels import PROBE_EXPECTED, SPOOF_KINDS
+from .labels import DISPUTED_EXPECTED, PROBE_EXPECTED, SPOOF_KINDS
 from .quality import GATE_STATUSES, QUALITY_STATUSES, REF_STATUSES
 
 
@@ -86,11 +86,22 @@ def section_gate(items: list[dict], clips: bool = False) -> dict:
     matrix: dict[str, Counter] = {}
     by: dict[str, Counter] = {}
     errors = []
+    disputed = []
     for it in items:
         row = it["row"]
         if not row.gate_expected or row.is_clip != clips:
             continue
         exp, st, out = row.gate_expected, it["gate_status"], it["gate_outcome"]
+        if exp in DISPUTED_EXPECTED:
+            # спорные — отдельной группой: не успех, не ошибка, не в матрице
+            disputed.append({
+                "file": row.display_file, "subject": row.display_subject, "status": st,
+                "reason": it["gate_reason"], "sim_own": _r(it.get("sim_own")),
+                "max_other_sim": _r(it.get("max_other_sim")),
+                "max_other_subject": it.get("max_other_subject"),
+                "liveness": _r((it.get("a") or {}).get("liveness")), "tags": ";".join(row.tags),
+            })
+            continue
         matrix.setdefault(exp, Counter())[st] += 1
         c = by.setdefault(exp, Counter())
         c["n"] += 1
@@ -118,8 +129,11 @@ def section_gate(items: list[dict], clips: bool = False) -> dict:
              "wrong_reason": c["outcome:wrong_reason"], "false_reject": c["outcome:false_reject"],
              "spoof_accepted": c["outcome:spoof_accepted"], "critical": c["outcome:critical"]}
         summary[exp] = s
-    return {"matrix": {k: dict(v) for k, v in matrix.items()}, "by_expected": summary,
-            "errors": errors, "statuses": list(GATE_STATUSES)}
+    res = {"matrix": {k: dict(v) for k, v in matrix.items()}, "by_expected": summary,
+           "errors": errors, "statuses": list(GATE_STATUSES)}
+    if disputed:
+        res["disputed"] = disputed
+    return res
 
 
 # ------------------------------------------------------------------ пары
@@ -256,7 +270,8 @@ def section_spoofs(items: list[dict]) -> dict:
 
 def section_liveness(items: list[dict], refs: list[dict], live_thr: float) -> dict:
     live = [it["a"]["liveness"] for it in items
-            if it.get("a") and it["row"].kind == "gate" and it["a"].get("liveness") is not None]
+            if it.get("a") and it["row"].kind == "gate" and it["a"].get("liveness") is not None
+            and it["row"].gate_expected not in DISPUTED_EXPECTED]
     spoof = [it["a"]["liveness"] for it in items
              if it.get("a") and it["row"].kind in SPOOF_KINDS and it["a"].get("liveness") is not None]
     ref_scores = [r["a"]["liveness"] for r in refs if r["a"].get("liveness") is not None]

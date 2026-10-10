@@ -203,6 +203,36 @@ services:
     networks:
       - edge           # для опубликованного порта 1935
       - face-internal  # RTSP для модуля face
+  # Тестовая консоль модуля лиц для команды: живой просмотр камеры (люди и лица) и проверка файлов.
+  # Отдельный экземпляр (не тот, что проверяет проход), порт только на 127.0.0.1 — наружу через общий
+  # Caddy (console.<IP>.sslip.io с basic auth). Камеру читает из camera-relay во внутренней сети.
+  face-console:
+    <<: *hardened
+    profiles: [backend]
+    image: ${FACE_IMAGE:-prohodnaya-face}:${FACE_TAG:-local}
+    user: "10001:10001"
+    environment:
+      FACE_CONSOLE: "1"
+      FACE_CAMERAS: ${FACE_CAMERAS:-}
+      FACE_THREADS: ${FACE_THREADS:-4}
+      ORT_DISABLE_TELEMETRY: "1"
+    tmpfs:
+      - /tmp:size=256m,uid=10001,gid=10001,mode=0700,noexec,nosuid,nodev
+    ports:
+      - "127.0.0.1:${FACE_CONSOLE_PORT:-8030}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json,sys,urllib.request as u; r=u.urlopen('http://127.0.0.1:8000/v1/health', timeout=4); sys.exit(0 if json.load(r).get('models_loaded') else 1)"]
+      interval: 15s
+      timeout: 5s
+      start_period: 90s
+      retries: 3
+    cpus: 4.0
+    mem_limit: 3g
+    pids_limit: 200
+    stop_grace_period: 10s
+    networks:
+      - edge           # для порта 127.0.0.1:8030 (сеть face-internal без выхода наружу порты не публикует)
+      - face-internal  # RTSP camera-relay
 
   # Сюда добавится ollama (его ведёт другой участник).
 
