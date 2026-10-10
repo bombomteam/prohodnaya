@@ -55,6 +55,8 @@ PostgreSQL 16 (psycopg 3), pydantic v2, shapely/numpy (геометрия), pyte
 | `FACE_URL` | адрес модуля распознавания лиц | `http://face:8000` |
 | `FACE_TIMEOUT_S` | таймаут запроса к модулю, с (таймаут = отказ «сервис недоступен») | `10` |
 | `FACE_CAMERA_ID` | идентификатор камеры проходной в модуле лиц | `gate-1` |
+| `CAMERA_ID` | камера, которую показывает сайт (`/api/camera/*`) | `FACE_CAMERA_ID` |
+| `FACE_CONSOLE_URL` | адрес консоли модуля лиц (живое видео с рамками) | `http://face-console:8000` |
 | `LOCATION_INTERVAL_S` | период отправки геоточек телефоном, с (от него считается вес точки) | `30` |
 | `LOCATION_MAX_AGE_S` | максимальный возраст пачки геоточек, с (защита от повтора) | `180` |
 | `AUTH_DEV_BYPASS` | `true` — вход без токена, только для локальной разработки | `false` |
@@ -92,6 +94,12 @@ docker compose exec -T backend python -m pytest -q -p no:cacheprovider tests
 `GET /api/assistant/status` (admin, manager) даёт `{provider, model, configured, available}`; `PUT /api/assistant/provider`
 (`{"provider":"ollama"|"external"}`) переключает провайдер в памяти процесса (uvicorn запускается с одним воркером), после
 перезапуска действует `LLM_PROVIDER` из env. Ключ API в ответах не возвращается.
+
+**Камера на входе.** `GET /api/camera/status` (admin, manager, controller) отдаёт `{camera_id, online, fps, last_frame_age_ms}`
+из `GET /v1/health` модуля лиц; модуль недоступен — `online=false`, не ошибка. `GET /api/camera/frame.jpg` (те же роли) отдаёт
+последний кадр с рамками (`image/jpeg`, `Cache-Control: no-store`) или 503 `CAMERA_OFFLINE`. Консоль отдаёт видео только MJPEG-потоком
+(`/v1/cameras/{id}/live.mjpeg`), поэтому бэкенд держит одно соединение с ней: фоновый поток стартует при первом запросе кадра,
+хранит последний JPEG и останавливается через 30 с без запросов; кадр старше 2 с не отдаётся.
 
 **Геоточки.** Телефон шлёт пачки `POST /api/locations` раз в `LOCATION_INTERVAL_S`; точки старше
 `LOCATION_MAX_AGE_S` отклоняются. План и калибровка — `PUT /api/site/plan`, `PUT /api/site/calibration`.

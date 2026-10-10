@@ -20,6 +20,8 @@ class Settings:
     face_url: str
     face_timeout_s: float
     face_camera_id: str
+    camera_id: str
+    face_console_url: str
     location_interval_s: int
     location_max_age_s: int
     auth_dev_bypass: bool
@@ -58,6 +60,8 @@ def load_settings() -> Settings:
         face_url=(env("FACE_URL") or "http://face:8000").rstrip("/"),
         face_timeout_s=float(env("FACE_TIMEOUT_S") or 10),
         face_camera_id=env("FACE_CAMERA_ID") or "gate-1",
+        camera_id=env("CAMERA_ID") or env("FACE_CAMERA_ID") or "gate-1",
+        face_console_url=(env("FACE_CONSOLE_URL") or "http://face-console:8000").rstrip("/"),
         location_interval_s=_int("LOCATION_INTERVAL_S", 30),
         location_max_age_s=_int("LOCATION_MAX_AGE_S", 180),
         auth_dev_bypass=(env("AUTH_DEV_BYPASS") or "false").lower() == "true",
