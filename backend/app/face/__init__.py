@@ -104,7 +104,7 @@ def _post(path: str, model: type[T], timeout: float | None = None, **kwargs) -> 
     try:
         with httpx.Client(transport=_transport, timeout=timeout or settings.face_timeout_s) as client:
             r = client.post(settings.face_url + path, **kwargs)
-    except httpx.HTTPError as e:
+    except Exception as e:  # не только httpx.HTTPError: кривой FACE_URL (InvalidURL) тоже = модуль недоступен
         log.error("face %s: запрос не удался (%s)", path, type(e).__name__)
         raise FaceUnavailable(f"{path}: {type(e).__name__}") from e
     if r.status_code != 200:

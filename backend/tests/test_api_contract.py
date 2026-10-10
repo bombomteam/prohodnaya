@@ -55,7 +55,8 @@ def test_stub_routes_ok(bypass):
     assert r.status_code == 200 and r.json()["zones"][1]["level"] == "empty"
 
 
-def test_face_accepts_one_to_ten_frames(bypass):
+def test_face_accepts_one_to_ten_frames(client):
+    # 1–10 кадров проходят валидацию (дальше — 404, сессии нет); логика прохода — в test_passages.py
     url = f"/api/passages/{SID}/face"
 
     def frames(n):
@@ -63,8 +64,9 @@ def test_face_accepts_one_to_ten_frames(bypass):
 
     assert client.post(url).status_code == 422
     assert client.post(url, files=frames(11)).status_code == 422
-    assert client.post(url, files=frames(1)).status_code == 200
-    assert client.post(url, files=frames(10)).status_code == 200
+    for n in (1, 10):
+        r = client.post(url, files=frames(n))
+        assert r.status_code == 404 and r.json()["code"] == "SESSION_NOT_FOUND"
 
 
 def test_validation_error_format(bypass):
@@ -84,19 +86,20 @@ def test_garbage_token_401(no_bypass):
     assert r.status_code == 401 and r.json()["code"] == "HTTP_401"
 
 
-def test_public_routes_without_token(no_bypass):
+def test_public_routes_without_token(client, no_bypass):
     # /enroll не требует токена: до БД дело не доходит, пустой ключ отвергается как JWK_INVALID
     r = client.post("/api/enroll", json={"code": "c", "public_key_jwk": {}})
     assert r.status_code == 400 and r.json()["code"] == "JWK_INVALID"
-    assert client.post(f"/api/passages/{SID}/sign", json={"device_id": SID, "signature": "s"}).status_code == 200
+    r = client.post(f"/api/passages/{SID}/sign", json={"device_id": SID, "signature": "s"})  # дошли до БД: сессии нет
+    assert r.status_code == 404 and r.json()["code"] == "SESSION_NOT_FOUND"
     assert client.post("/api/locations", json={"device_id": SID, "payload": "{}", "signature": "s"}).status_code == 200
 
 
-def test_wrong_role_403(no_bypass):
+def test_wrong_role_403(client, no_bypass):
     app.dependency_overrides[current_user] = lambda: {"sub": "u", "realm_access": {"roles": ["controller"]}}
     try:
         assert client.get("/api/groups").status_code == 403  # admin
         assert client.get("/api/groups").json()["code"] == "HTTP_403"
         assert client.post("/api/passages", json={"direction": "in"}).status_code == 200  # controller
     finally:
-        app.dependency_overrides.clear()
+        app.dependency_overrides.pop(current_user, None)

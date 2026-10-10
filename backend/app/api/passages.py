@@ -1,62 +1,49 @@
-import json
-from datetime import datetime, timedelta, timezone
 from typing import Annotated
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from fastapi import APIRouter, File, UploadFile
 
-from app.core.config import settings
-from app.dependency import ControllerDep
-from app.schemas.common import PersonRef, ShiftOut
+from app.api.persons import MAX_PHOTO_BYTES
+from app.dependency import ControllerDep, DbDep
 from app.schemas.passages import (
-    FaceResultOut, PassageCreate, PassageCreated, PassageStatusOut, SignedPerson, SignIn, SignOut,
+    FaceResultOut, PassageCreate, PassageCreated, PassageStatusOut, SignIn, SignOut,
 )
+from app.services import passage as service
 
 router = APIRouter(tags=["passages"])
 
-_FIO = "Иванов Иван Иванович"
-
 
 @router.post("/passages", response_model=PassageCreated)
-def create_passage(body: PassageCreate, user: ControllerDep):
+def create_passage(body: PassageCreate, db: DbDep, user: ControllerDep):
     """Контролёр начинает проход: сессия с одноразовым nonce и QR."""
-    # STUB
-    sid, nonce = uuid4(), "stub-nonce"
-    return PassageCreated(
-        session_id=sid, nonce=nonce, direction=body.direction,
-        expires_at=datetime.now(timezone.utc) + timedelta(seconds=settings.pass_session_ttl_s),
-        qr_payload=json.dumps({"sid": str(sid), "n": nonce, "d": body.direction}, separators=(",", ":")),
-    )
+    return service.create(db, user["sub"], body.direction)
 
 
 @router.post("/passages/{session_id}/sign", response_model=SignOut)
-def sign_passage(session_id: UUID, body: SignIn):
+def sign_passage(session_id: UUID, body: SignIn, db: DbDep):
     """Без токена: телефон подписывает session_id|nonce|direction ключом устройства."""
-    # STUB
-    return SignOut(status="signed", person=SignedPerson(fio=_FIO))
+    return service.sign(db, session_id, body)
 
 
 @router.get("/passages/{session_id}", response_model=PassageStatusOut)
-def get_passage(session_id: UUID, user: ControllerDep):
+def get_passage(session_id: UUID, db: DbDep, user: ControllerDep):
     """Статус сессии; планшет опрашивает раз в секунду."""
-    # STUB
-    return PassageStatusOut(
-        session_id=session_id, status="signed", direction="in",
-        expires_at=datetime.now(timezone.utc) + timedelta(seconds=60),
-        person=PersonRef(id=1, fio=_FIO), decision=None, reason_code=None, reason=None,
-    )
+    return service.get_status(db, session_id)
 
 
 @router.post("/passages/{session_id}/face", response_model=FaceResultOut)
 def check_face(
     session_id: UUID,
+    db: DbDep,
     user: ControllerDep,
     frames: Annotated[list[UploadFile], File(min_length=1, max_length=10)],
 ):
     """1–10 кадров лица (multipart, поле frames); сервер сам решает allow/deny."""
-    # STUB
-    now = datetime.now(timezone.utc)
-    return FaceResultOut(
-        decision="allow", reason_code=None, reason=None, person=PersonRef(id=1, fio=_FIO),
-        shift=ShiftOut(id=1, started_at=now, ended_at=None, worked_minutes=None),
-    )
+    data, too_large = [], False
+    for f in frames:
+        content = f.file.read(MAX_PHOTO_BYTES + 1)  # лимит как у фото; остальные кадры после превышения не читаем
+        data.append((content, f.filename or "frame.jpg", f.content_type or "application/octet-stream"))
+        if len(content) > MAX_PHOTO_BYTES:
+            too_large = True
+            break
+    return service.check_face(db, session_id, user["sub"], data, too_large)
