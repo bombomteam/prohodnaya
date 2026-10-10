@@ -1,8 +1,11 @@
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 
 from app.core.logging import setup_logging
 
@@ -12,8 +15,17 @@ setup_logging()
 from app.api.router import common_router  # noqa: E402
 from app.core.config import settings  # noqa: E402
 from app.core.handlers import register_exception_handlers  # noqa: E402
+from app.services import camera  # noqa: E402
 
-app = FastAPI(title="Проходная: бэкенд")
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    """При остановке приложения закрывает соединение читателя кадров камеры с консолью."""
+    yield
+    await run_in_threadpool(camera.shutdown)
+
+
+app = FastAPI(title="Проходная: бэкенд", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

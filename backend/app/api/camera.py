@@ -10,7 +10,7 @@ router = APIRouter(tags=["camera"])
 @router.get("/camera/status", response_model=CameraStatusOut)
 def camera_status(user: CameraViewerDep):
     """Состояние камеры на входе; модуль недоступен — online=false, не ошибка."""
-    return service.get_status()
+    return service.get_status(service.STATUS_CACHE_S)
 
 
 @router.get(

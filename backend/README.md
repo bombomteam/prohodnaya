@@ -99,7 +99,8 @@ docker compose exec -T backend python -m pytest -q -p no:cacheprovider tests
 из `GET /v1/health` модуля лиц; модуль недоступен — `online=false`, не ошибка. `GET /api/camera/frame.jpg` (те же роли) отдаёт
 последний кадр с рамками (`image/jpeg`, `Cache-Control: no-store`) или 503 `CAMERA_OFFLINE`. Консоль отдаёт видео только MJPEG-потоком
 (`/v1/cameras/{id}/live.mjpeg`), поэтому бэкенд держит одно соединение с ней: фоновый поток стартует при первом запросе кадра,
-хранит последний JPEG и останавливается через 30 с без запросов; кадр старше 2 с не отдаётся.
+хранит последний JPEG и останавливается через 30 с без запросов (и при остановке приложения); кадр старше 2 с не отдаётся.
+Заглушку консоли «Нет кадров с камеры» отличаем по здоровью самой консоли (`FACE_CONSOLE_URL/v1/health`); здоровье кешируется на 1 с.
 
 **Геоточки.** Телефон шлёт пачки `POST /api/locations` раз в `LOCATION_INTERVAL_S`; точки старше
 `LOCATION_MAX_AGE_S` отклоняются. План и калибровка — `PUT /api/site/plan`, `PUT /api/site/calibration`.

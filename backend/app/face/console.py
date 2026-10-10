@@ -16,7 +16,7 @@ log = logging.getLogger("app.face.console")
 
 _transport: httpx.BaseTransport | None = None  # подмена транспорта в тестах (httpx.MockTransport)
 
-HEALTH_TIMEOUT_S = 2.0
+HEALTH_TIMEOUT_S = 1.0
 STREAM_CONNECT_TIMEOUT_S = 3.0
 STREAM_READ_TIMEOUT_S = 3.0  # консоль шлёт хотя бы заглушку раз в ~2 с; тишина дольше = обрыв
 MAX_BUFFER = 8 * 1024 * 1024
@@ -27,14 +27,14 @@ class CameraUnavailable(Exception):
     """Модуль или консоль недоступны / ответили не по контракту."""
 
 
-def camera_health(camera_id: str) -> dict | None:
-    """Запись камеры из `GET /v1/health` модуля лиц: {camera_id, online, last_frame_age_ms, fps_in, ...}.
+def camera_health(camera_id: str, base_url: str | None = None) -> dict | None:
+    """Запись камеры из `GET /v1/health` модуля лиц (или консоли, если задан base_url).
 
-    None — модуль жив, но такой камеры в нём нет. Недоступен/не по контракту — CameraUnavailable.
+    Формат: {camera_id, online, last_frame_age_ms, fps_in, ...}. None — модуль жив, но такой камеры в нём нет. Недоступен/не по контракту — CameraUnavailable.
     """
     try:
         with httpx.Client(transport=_transport, timeout=HEALTH_TIMEOUT_S) as client:
-            r = client.get(settings.face_url + "/v1/health")
+            r = client.get((base_url or settings.face_url) + "/v1/health")
         r.raise_for_status()
         cameras = r.json()["cameras"]
         for cam in cameras:

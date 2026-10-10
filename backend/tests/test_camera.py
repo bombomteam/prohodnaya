@@ -36,7 +36,8 @@ def roles(*names):
 @pytest.fixture(autouse=True)
 def clean(monkeypatch):
     """Каждый тест — с чистым кешем статуса и без чужого читателя; роли подменяются через dependency_overrides."""
-    monkeypatch.setattr(service, "_status_cache", None)
+    monkeypatch.setattr(service, "_face_status", service._CachedStatus(lambda: "http://face:8000"))
+    monkeypatch.setattr(service, "_console_status", service._CachedStatus(lambda: "http://face-console:8000"))
     monkeypatch.setattr(auth, "settings", dataclasses.replace(auth.settings, auth_dev_bypass=False))
     yield
     app.dependency_overrides.pop(current_user, None)
@@ -181,12 +182,14 @@ def test_frame_503_when_console_unreachable(client, mock_face, monkeypatch):
 
 def test_frame_older_than_2s_not_served():
     now = [100.0]
-    started = threading.Event()
+    release = threading.Event()
 
     @contextmanager
     def open_stream(camera_id):
-        started.set()
-        yield iter([JPEG_A])
+        def frames():
+            yield JPEG_A
+            release.wait(10)  # поток открыт и молчит: переподключений и новых кадров нет, время не зависит от стенда
+        yield frames()
 
     reader = service.FrameReader(open_stream=open_stream, clock=lambda: now[0])
     try:
@@ -196,7 +199,37 @@ def test_frame_older_than_2s_not_served():
         now[0] += 0.2  # кадру 2.1 с, а _last_request обновился — читатель жив, но нового кадра нет
         assert reader.get_frame() is None
     finally:
+        release.set()
         reader.stop()
+
+
+def test_frame_503_when_console_offline_but_face_online(client, mock_face, fake_reader):
+    """Заглушка консоли («Нет кадров») не отдаётся как видео: решает здоровье самой консоли, а не модуля лиц."""
+    roles("controller")
+
+    def handler(request):
+        return httpx.Response(200, json=health(online=request.url.host != "face-console"))
+
+    mock_face(handler)
+    fake_reader([JPEG_A])
+    assert client.get("/api/camera/frame.jpg").json() == OFFLINE
+    assert client.get("/api/camera/status").json()["online"] is True
+
+
+@pytest.mark.parametrize("bad", [{"fps_in": "x"}, {"age": "давно"}, {"fps_in": [1]}])
+def test_status_off_contract_values_is_200_offline(client, mock_face, bad):
+    roles("controller")
+    mock_face(lambda r: httpx.Response(200, json=health(**bad)))
+    r = client.get("/api/camera/status")
+    assert r.status_code == 200
+    assert r.json() == {"camera_id": "gate-1", "online": False, "fps": None, "last_frame_age_ms": None}
+
+
+def test_frame_503_when_health_off_contract(client, mock_face, fake_reader):
+    roles("controller")
+    mock_face(lambda r: httpx.Response(200, json=health(fps_in="x")))
+    fake_reader([JPEG_A])
+    assert client.get("/api/camera/frame.jpg").json() == OFFLINE
 
 
 # ---------------------------------------------------------------- доступ
@@ -215,16 +248,65 @@ def test_wrong_role_403(client, path, role):
     assert r.status_code == 403 and r.json()["code"] == "HTTP_403"
 
 
+# ---------------------------------------------------------------- кеш статуса
+
+def test_status_cache_time_taken_after_slow_health(mock_face, monkeypatch):
+    """Медленное здоровье (дольше окна кеша) не делает запись протухшей: кеш считается от получения ответа."""
+    calls = []
+
+    def handler(request):
+        calls.append(time.monotonic())
+        time.sleep(0.15)
+        return httpx.Response(200, json=health())
+
+    mock_face(handler)
+    src = service._CachedStatus(lambda: "http://face:8000")
+    assert src.get(0.5).online is True
+    for _ in range(5):
+        assert src.get(0.5).online is True
+    assert len(calls) == 1
+
+
+def test_status_single_flight_under_concurrency(mock_face):
+    """Параллельные запросы при протухшем кеше делают один вызов здоровья, остальные ждут его результат."""
+    calls = []
+
+    def handler(request):
+        calls.append(1)
+        time.sleep(0.3)
+        return httpx.Response(200, json=health())
+
+    mock_face(handler)
+    src = service._CachedStatus(lambda: "http://face:8000")
+    results = []
+    threads = [threading.Thread(target=lambda: results.append(src.get(1.0).online)) for _ in range(8)]
+    start = time.monotonic()
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(5)
+    assert results == [True] * 8 and len(calls) == 1
+    assert time.monotonic() - start < 1.5
+
+
+def test_status_route_uses_cache(client, mock_face):
+    roles("controller")
+    seen = mock_face(lambda r: httpx.Response(200, json=health()))
+    for _ in range(3):
+        assert client.get("/api/camera/status").status_code == 200
+    assert len(seen) == 1
+
+
 # ---------------------------------------------------------------- читатель
 
-def test_reader_single_connection_for_many_requests(fake_reader):
+def test_reader_single_connection_for_many_requests():
     opened = []
 
     @contextmanager
     def open_stream(camera_id):
         opened.append(camera_id)
         yield iter([JPEG_A])
-        time.sleep(0.3)  # поток «висит» открытым: повторных подключений быть не должно
+        time.sleep(0.5)  # поток «висит» открытым: повторных подключений быть не должно
 
     reader = service.FrameReader(open_stream=open_stream)
     try:
@@ -233,6 +315,90 @@ def test_reader_single_connection_for_many_requests(fake_reader):
         assert opened == ["gate-1"]
     finally:
         reader.stop()
+
+
+def test_reader_single_connection_and_all_wait_on_cold_start():
+    """10 одновременных запросов на холодном старте: одно соединение, и кадр получают все, а не только первый."""
+    opened = []
+    release = threading.Event()
+
+    @contextmanager
+    def open_stream(camera_id):
+        opened.append(camera_id)
+
+        def frames():
+            time.sleep(0.3)  # первый кадр приходит не сразу
+            yield JPEG_A
+            release.wait(10)
+        yield frames()
+
+    reader = service.FrameReader(open_stream=open_stream)
+    results = []
+    threads = [threading.Thread(target=lambda: results.append(reader.get_frame())) for _ in range(10)]
+    try:
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(5)
+        assert results == [JPEG_A] * 10
+        assert len(opened) == 1
+    finally:
+        release.set()
+        reader.stop()
+
+
+def test_reader_logs_only_state_changes(caplog, monkeypatch):
+    """Недоступная консоль: одно предупреждение на серию сбоев, не по строке на каждую попытку."""
+    monkeypatch.setattr(service, "RECONNECT_DELAY_S", 0.01)
+    monkeypatch.setattr(service, "RECONNECT_MAX_DELAY_S", 0.02)
+    attempts = []
+
+    @contextmanager
+    def open_stream(camera_id):
+        attempts.append(1)
+        raise console.CameraUnavailable("ConnectError")
+        yield
+
+    reader = service.FrameReader(open_stream=open_stream)
+    try:
+        with caplog.at_level("WARNING", logger="app.camera"):
+            reader.get_frame()
+            deadline = time.monotonic() + 3
+            while len(attempts) < 5 and time.monotonic() < deadline:
+                time.sleep(0.02)
+    finally:
+        reader.stop()
+    assert len(attempts) >= 5
+    assert len([r for r in caplog.records if r.levelname == "WARNING"]) == 1
+
+
+def test_reader_reconnect_delay_grows_and_is_capped(monkeypatch):
+    monkeypatch.setattr(service, "RECONNECT_DELAY_S", 0.05)
+    monkeypatch.setattr(service, "RECONNECT_MAX_DELAY_S", 0.1)
+    waits = []
+
+    class Stop(threading.Event):
+        def wait(self, timeout=None):
+            waits.append(timeout)
+            return len(waits) >= 4
+
+    @contextmanager
+    def open_stream(camera_id):
+        raise console.CameraUnavailable("x")
+        yield
+
+    reader = service.FrameReader(open_stream=open_stream)
+    reader._last_request = reader._clock()
+    reader._run(Stop())
+    assert waits == [0.05, 0.1, 0.1, 0.1]
+
+
+def test_app_shutdown_stops_reader(monkeypatch):
+    stopped = []
+    monkeypatch.setattr(service, "shutdown", lambda: stopped.append(1))
+    with TestClient(app):
+        assert not stopped
+    assert stopped == [1]
 
 
 def test_reader_stops_when_idle_and_restarts():
