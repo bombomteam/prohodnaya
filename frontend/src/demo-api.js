@@ -156,7 +156,10 @@ export const demoApi = {
     const cols = Math.ceil(Math.sqrt(state.site.zones.length));
     const rows = Math.ceil(state.site.zones.length / cols);
     const zones = state.site.zones.map((name, index) => ({ id: `z${index}`, name, count: points.filter(x => x.x >= 0 && x.x <= 100 && x.y >= 0 && x.y <= 100 && Math.min(cols - 1, Math.floor(x.x / (100 / cols))) + Math.min(rows - 1, Math.floor(x.y / (100 / rows))) * cols === index).length }));
-    const routes = [...new Set(points.map(x => x.employeeId))].map(employeeId => ({ employeeId, employeeName: person(state, employeeId)?.name || "Сотрудник", points: points.filter(x => x.employeeId === employeeId).sort((a, b) => a.at.localeCompare(b.at)) }));
+    const routes = [...new Set(points.map(x => x.employeeId))].map(employeeId => ({ employeeId, employeeName: person(state, employeeId)?.name || "Сотрудник", points: points.filter(x => x.employeeId === employeeId).sort((a, b) => a.at.localeCompare(b.at)).map(point => ({ ...point,
+      zoneId: point.x >= 0 && point.x <= 100 && point.y >= 0 && point.y <= 100
+        ? `z${Math.min(cols - 1, Math.floor(point.x / (100 / cols))) + Math.min(rows - 1, Math.floor(point.y / (100 / rows))) * cols}` : null,
+    })) }));
     return { metric: "Число полученных точек геолокации в зоне", zones, routes, totalPoints: points.length };
   },
   async shiftReport(filters) {
