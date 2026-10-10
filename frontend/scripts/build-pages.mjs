@@ -1,4 +1,4 @@
-import { cpSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { config } from "../config.js";
@@ -10,7 +10,7 @@ if (config.mode !== "demo") throw new Error("Публикация GitHub Pages �
 
 rmSync(output, { recursive: true, force: true });
 mkdirSync(join(output, "src"), { recursive: true });
-for (const name of ["index.html", "styles.css", "config.js"]) cpSync(join(projectRoot, name), join(output, name));
-for (const name of ["app.js", "api.js", "demo-api.js", "webauthn.js"]) cpSync(join(projectRoot, "src", name), join(output, "src", name));
+for (const name of ["index.html", "styles.css", "config.js"]) writeFileSync(join(output, name), readFileSync(join(projectRoot, name)));
+for (const name of ["app.js", "api.js", "demo-api.js", "webauthn.js", "auth.js", "device.js", "view.js"]) writeFileSync(join(output, "src", name), readFileSync(join(projectRoot, "src", name)));
 writeFileSync(join(output, ".nojekyll"), "");
 console.log(`Готов статический сайт: ${output}`);

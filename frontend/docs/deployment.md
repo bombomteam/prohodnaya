@@ -34,13 +34,13 @@ docker run --rm --name prohodnaya-frontend --network prohodnaya -p 8080:8080 -e 
 
 Бэкенд должен быть запущен в той же сети **до** старта фронта. `API_BASE_URL` в этом варианте равен `/api`; браузер обращается к тому же origin, а Nginx передаёт полный путь `/api/...` бэкенду. Если бэкенд опубликован отдельно, вместо `API_UPSTREAM` передайте `-e FRONTEND_MODE=api -e API_BASE_URL=https://api.example.org/api`. Такой адрес должен открываться **из браузера пользователя**; на другом устройстве `localhost` указывает на само это устройство. Для разных origin сервер должен разрешить CORS и передачу cookie. Адрес API и режим записываются в публичный `config.js` при запуске контейнера; секреты через эти переменные передавать нельзя.
 
-Камера, WebAuthn и геолокация на удалённом телефоне требуют HTTPS для **фронта**. TLS можно завершать на внешнем reverse proxy. Для WebAuthn сервер должен использовать RP ID домена фронта. Установка `FRONTEND_MODE=api` сама по себе не добавляет сервер, БД и проверки прохода. Поля и пути API описаны в [контракте](frontend-api.md).
+Камера, WebCrypto и геолокация на удалённом телефоне требуют HTTPS для **фронта**. TLS можно завершать на внешнем reverse proxy. Keycloak также доступен по HTTPS. ECDSA-ключ сохраняется только для текущего origin. Установка `FRONTEND_MODE=api` сама по себе не добавляет сервер, БД и проверки прохода. Поля и пути API описаны в [контракте](frontend-api.md).
 
 ## GitHub Pages
 
 Публичный адрес актуальной версии из `main`: https://bombomteam.github.io/prohodnaya/.
 
-Workflow [`.github/workflows/pages.yml`](../../.github/workflows/pages.yml) запускается при push в `main` и вручную. Он выполняет тесты, собирает статический артефакт и публикует его через GitHub Pages. Сборка находится в `frontend/scripts/build-pages.mjs` и копирует только `index.html`, `styles.css`, `config.js` и четыре JS-модуля из `src/`. Фотографии и документы кейса не входят в Pages-артефакт.
+Workflow [`.github/workflows/pages.yml`](../../.github/workflows/pages.yml) запускается при push в `main` и вручную. Он выполняет тесты, собирает статический артефакт и публикует его через GitHub Pages. Сборка находится в `frontend/scripts/build-pages.mjs` и копирует статические ES-модули приложения; config.js остаётся runtime-конфигурацией. Фотографии и документы кейса не входят в Pages-артефакт.
 
 Проверить артефакт локально:
 
