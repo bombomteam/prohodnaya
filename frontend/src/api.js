@@ -32,7 +32,7 @@ export function startOfDayIso(now = new Date(), timeZone = config.timeZone || "E
   return new Date(Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day)) - offsetMs).toISOString();
 }
 
-export async function request(path, { method = "GET", body, signal, auth = "operator", headers = {}, timeoutMs = config.requestTimeoutMs || 15000 } = {}) {
+export async function request(path, { method = "GET", body, signal, auth = "operator", headers = {}, timeoutMs = config.requestTimeoutMs || 15000, responseType = "json" } = {}) {
   if (auth === "operator") {
     const token = await accessToken();
     if (token) headers = { ...headers, Authorization: `Bearer ${token}` };
@@ -45,6 +45,7 @@ export async function request(path, { method = "GET", body, signal, auth = "oper
     response = await fetch(`${config.apiBaseUrl}${path}`, {
       method,
       credentials: "omit",
+      ...(responseType === "blob" ? { cache: "no-store" } : {}),
       headers: { ...(isForm || body === undefined ? {} : { "Content-Type": "application/json" }), ...headers },
       body: isForm ? body : body === undefined ? undefined : JSON.stringify(body),
       signal: combined,
@@ -52,6 +53,10 @@ export async function request(path, { method = "GET", body, signal, auth = "oper
   } catch (error) {
     if (error.name === "AbortError" || error.name === "TimeoutError") throw new ApiError("Время ожидания истекло. Проверьте результат попытки перед повтором.");
     throw new ApiError("Нет связи с сервером. Проверьте подключение и повторите попытку.");
+  }
+  // Двоичный ответ (кадр камеры): при успехе отдаём Blob, ошибка приходит обычным JSON {code, message}.
+  if (responseType === "blob" && response.ok) {
+    try { return await response.blob(); } catch { throw new ApiError("Не удалось получить ответ сервера. Повторите попытку."); }
   }
   let data;
   try { data = await response.json(); } catch { data = null; }
@@ -124,6 +129,12 @@ function mapPassage(value) {
     personName: value.person?.fio || null, decision: value.decision || null, reason: reasonText(value, ""),
     reasonCode: value.reason_code || null,
   };
+}
+
+const finiteOrNull = value => value === null || value === undefined || value === "" || !Number.isFinite(Number(value)) ? null : Number(value);
+export function mapCameraStatus(value) {
+  return { cameraId: typeof value?.camera_id === "string" && value.camera_id ? value.camera_id : "gate-1", online: value?.online === true,
+    fps: finiteOrNull(value?.fps), lastFrameAgeMs: finiteOrNull(value?.last_frame_age_ms) };
 }
 
 const assistantAnswer = value => ({ status: value.status, answer: value.text, factsUsed: value.facts_used, provider: value.provider, model: value.model });
@@ -253,6 +264,10 @@ export const backendApi = {
   updateCalibration: points => request("/site/calibration", { method: "PUT", body: { points } }),
   updateZones: zones => request("/zones", { method: "PUT", body: { zones } }),
   updateSite: () => { throw new ApiError("План, калибровка и зоны настраиваются отдельно."); },
+  // Камера на входе (admin, manager, controller): последний кадр с рамками модуля и состояние камеры.
+  // Кадр — image/jpeg; камера не передаёт видео — 503 {code:"CAMERA_OFFLINE"}.
+  cameraFrame: ({ signal } = {}) => request("/camera/frame.jpg", { signal, responseType: "blob", timeoutMs: config.cameraFrameTimeoutMs || 5000 }),
+  cameraStatus: async ({ signal } = {}) => mapCameraStatus(await request("/camera/status", { signal, timeoutMs: 6000 })),
   ask: async question => assistantAnswer(await request("/assistant/ask", { method: "POST", body: { question } })),
   summary: async (from, to) => assistantAnswer(await request("/assistant/summary", { method: "POST", body: { date_from: from, date_to: to } })),
   assistantStatus: async () => {

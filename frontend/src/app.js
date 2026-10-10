@@ -5,9 +5,13 @@ import { session, allowedPages, canEdit, canManageSite, initAuth, login, logout,
 import { landingHtml, demoBarHtml, guideHtml } from "./landing.js";
 import { forgetDevice, requireSecureContext } from "./device.js";
 import { createView } from "./view.js";
+import { createCameraLive } from "./camera.js";
 
 const root = document.querySelector("#app");
 const paint = createView(root);
+// Живое видео камеры на входе: в рабочем режиме кадры с рамками от сервера, в демо — только заглушка без запросов.
+const cameraLive = createCameraLive({ enabled: config.mode === "api",
+  fetchFrame: options => api.cameraFrame(options), fetchStatus: options => api.cameraStatus(options) });
 let initialized = false;
 let entryError = "";
 let polling = false;
@@ -184,7 +188,7 @@ function overview() {
     ? emptyState("users", "Пока никого нет", canEdit() ? "В системе нет ни одного сотрудника. Добавьте первого на вкладке «Сотрудники»." : "Заведите человека у администратора — после этого он появится в списках.",
       canEdit() ? '<button class="button button-primary" data-page="employees">Перейти к сотрудникам</button>' : "")
     : emptyState("door", "На объекте пока никого нет", "Сотрудники появятся здесь сразу после входа через проходную.");
-  return `<div class="stats-grid">${cards.join("")}</div><div class="two-columns"><section class="panel"><div class="panel-heading"><div><h2>Кто на объекте</h2><p>Сотрудники с открытой сменой</p></div><span class="count-pill">${inside}</span></div>
+  return `<div class="stats-grid">${cards.join("")}</div>${cameraLive.html()}<div class="two-columns"><section class="panel"><div class="panel-heading"><div><h2>Кто на объекте</h2><p>Сотрудники с открытой сменой</p></div><span class="count-pill">${inside}</span></div>
     ${inside ? `<div class="people-list">${d.inside.map(x => `<div class="person-row"><div class="person-avatar">${esc(initials(x.name))}</div><div><b>${esc(x.name)}</b><small>${esc(x.role || x.company || "Сотрудник")}${x.lastZone ? ` · ${esc(x.lastZone)}` : ""}</small></div><div class="person-time"><b>${time(x.enteredAt)}</b><small>${duration(x.enteredAt)}</small></div></div>`).join("")}</div>` : nobodyInside}
   </section><section class="panel"><div class="panel-heading"><div><h2>Последние проходы</h2><p>Входы, выходы и отказы</p></div><button class="text-button" data-page="journal">Весь журнал →</button></div>${eventRows(d.recentAttempts, 6)}</section></div>`;
 }
@@ -230,7 +234,7 @@ function targetedGate() {
   const c = state.challenge, result = state.passResult;
   const expired = c && Date.parse(c.expiresAt) <= Date.now();
   const confirmed = c?.status === "confirmed" && !expired;
-  return `<div class="gate-layout"><div class="gate-main">
+  return `<div class="gate-layout"><div class="gate-main">${cameraLive.html()}
     <section class="panel"><div class="step-heading"><span class="step-number">01</span><div><h2>Сотрудник и операция</h2><p>Найдите сотрудника по ФИО или номеру пропуска</p></div></div>
     <p class="hint-line">Выберите человека → он нажимает на телефоне «Я на проходной — получить код» → введите его 6 цифр → снимите лицо.</p>
     <label>Поиск по пропуску<input id="gate-person-search" type="search" placeholder="ФИО или номер пропуска" autocomplete="off"></label>
@@ -245,7 +249,7 @@ function targetedGate() {
     <p class="capture-settings">Снимем 3 кадра подряд. Держите лицо в кадре и не двигайтесь.</p><div class="camera-actions"><button class="button button-outline" data-action="start-camera" ${!confirmed || state.busy ? "disabled" : ""}>Включить камеру</button><button class="button button-outline" data-action="capture" ${state.cameraStream && confirmed && !state.busy ? "" : "disabled"}>Снять серию</button></div></section>
     <button class="button button-primary wide decision-button" data-action="decide-pass" ${confirmed && state.faceBlob && !state.busy ? "" : "disabled"}>Проверить лицо и получить решение</button>
     ${result ? `<div class="result-card ${result.outcome}" role="status"><strong>${result.outcome === "allowed" ? "Проход разрешён" : "Отказ в проходе"}</strong><span>${esc(result.employeeName || "Сотрудник")} · ${dirName(result.direction)}</span><p>${esc(result.reason)}</p></div>` : ""}</div>
-    <aside class="gate-aside"><div class="info-card"><h3>Порядок прохода</h3><ol><li>Выберите человека по пропуску</li><li>Отправьте запрос на его телефон</li><li>Введите код, который назовёт рабочий</li><li>Снимите лицо и дождитесь решения</li></ol><a href="?worker=1" target="_blank" rel="noopener noreferrer">Открыть профиль рабочего ↗</a></div><div class="note-card"><h3>Живой просмотр камеры</h3><a class="button button-outline wide" href="https://console.195-209-220-254.sslip.io/console/" target="_blank" rel="noopener noreferrer">Открыть камеру ↗</a></div>${config.mode === "demo" ? '<div class="note-card"><b>Демонстрация</b><p>Код и решение имитируются. Подпись телефона, сравнение лица, журнал и открытие смены в рабочем режиме проверяет сервер.</p></div>' : '<div class="note-card"><b>Решение принимает сервер</b><p>Код проверяет сервер, лицо сравнивается с эталоном, смену открывает только разрешение системы.</p></div>'}</aside></div>`;
+    <aside class="gate-aside"><div class="info-card"><h3>Порядок прохода</h3><ol><li>Выберите человека по пропуску</li><li>Отправьте запрос на его телефон</li><li>Введите код, который назовёт рабочий</li><li>Снимите лицо и дождитесь решения</li></ol><a href="?worker=1" target="_blank" rel="noopener noreferrer">Открыть профиль рабочего ↗</a></div>${config.mode === "demo" ? '<div class="note-card"><b>Демонстрация</b><p>Код и решение имитируются. Подпись телефона, сравнение лица, журнал и открытие смены в рабочем режиме проверяет сервер.</p></div>' : '<div class="note-card"><b>Решение принимает сервер</b><p>Код проверяет сервер, лицо сравнивается с эталоном, смену открывает только разрешение системы.</p></div>'}</aside></div>`;
 }
 
 function workerCodeCard(p) {
@@ -372,7 +376,10 @@ function journal() {
   return `<section class="panel"><div class="panel-heading"><div><h2>Все попытки прохода</h2><p>Успехи, отказы и понятные причины</p></div><span class="count-pill">${fmtNum(shown.length)}</span></div>${all.length ? `<div class="segment journal-filter" role="group" aria-label="Фильтр журнала">${tab("all", "Все", all.length)}${tab("allowed", "Разрешено", allowed)}${tab("denied", "Отказы", denied)}</div>` : ""}${shown.length ? eventRows(shown) : empty}</section>`;
 }
 
-function render() {
+// После каждой перерисовки блок камеры сам решает: опрашивать кадры, встать на паузу или остановиться.
+function render() { draw(); cameraLive.sync(root); }
+
+function draw() {
   if (!initialized || !allowedPages().includes(state.page)) {
     if (initialized && session.kind === "guest" && demoLoginEnabled()) { paint(landingHtml({ busyRole: state.landingBusy, error: entryError, guideOpen: state.guideOpen })); return; }
     paint(`<main class="main-content"><h1>Проходная</h1><p>${esc(entryError || (!initialized ? "Подключение…" : session.kind === "operator" ? "Доступ не назначен" : "Выберите способ входа"))}</p><button class="button button-primary" data-action="login">Вход оператора</button><button class="button button-outline" data-action="worker-entry">Телефон рабочего</button></main>`);
@@ -732,7 +739,7 @@ window.addEventListener("operator-session-expired", (event) => {
   state.employees = []; state.attempts = []; state.dashboard = null; state.enrollCode = null; state.assistant = null; state.assistantInfo = null;
   entryError = event.detail?.message || "Сессия истекла, войдите заново"; render();
 });
-window.addEventListener("beforeunload", () => { stopCamera(); stopLocation(); });
+window.addEventListener("beforeunload", () => { stopCamera(); stopLocation(); cameraLive.stop(); });
 render();
 try { await initAuth(); } catch (error) { entryError = errorMessage(error); }
 // Демо-стенд: сервер сообщает, можно ли входить кнопкой роли. Прошлая роль этой вкладки возвращается после перезагрузки.
