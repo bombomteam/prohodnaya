@@ -5,7 +5,7 @@ from datetime import datetime
 from sqlalchemy import Integer, cast, func, select, update
 from sqlalchemy.orm import Session
 
-from app.models import AccessEvent, Device, PassSession, Shift
+from app.models import AccessEvent, Device, PassSession, Person, Shift
 
 
 def add_session(db: Session, session_id: uuid.UUID, nonce: str, direction: str, controller_sub: str, expires_at: datetime) -> None:
@@ -78,3 +78,27 @@ def add_event(
         person_id=person_id, session_id=session_id, controller_sub=controller_sub, direction=direction,
         result=result, reason_code=reason_code, reason=reason,
     ))
+
+
+def list_events(
+    db: Session, ts_from: datetime | None, ts_to: datetime | None, result: str | None,
+    person_id: int | None, direction: str | None, limit: int, offset: int,
+) -> list:
+    """Журнал проходов, новые сверху. Границы времени включительные; person = (id, fio) или None."""
+    stmt = (
+        select(AccessEvent, Person.fio)
+        .outerjoin(Person, Person.id == AccessEvent.person_id)
+        .order_by(AccessEvent.ts.desc(), AccessEvent.id.desc())
+        .limit(limit).offset(offset)
+    )
+    if ts_from is not None:
+        stmt = stmt.where(AccessEvent.ts >= ts_from)
+    if ts_to is not None:
+        stmt = stmt.where(AccessEvent.ts <= ts_to)
+    if result is not None:
+        stmt = stmt.where(AccessEvent.result == result)
+    if person_id is not None:
+        stmt = stmt.where(AccessEvent.person_id == person_id)
+    if direction is not None:
+        stmt = stmt.where(AccessEvent.direction == direction)
+    return list(db.execute(stmt))

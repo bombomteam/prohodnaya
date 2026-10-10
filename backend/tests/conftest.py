@@ -1,6 +1,9 @@
 """Общие фикстуры: отдельная тестовая БД `<имя>_test` в том же Postgres, миграции, очистка между тестами."""
+import atexit
 import dataclasses
 import os
+import shutil
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -12,6 +15,11 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 
 ROOT = Path(__file__).resolve().parent.parent
+
+# До импорта app: main.py монтирует статику плана из DATA_DIR, тесты не должны писать в реальный /data.
+_DATA_DIR = tempfile.mkdtemp(prefix="prohodnaya-data-")
+os.environ["DATA_DIR"] = _DATA_DIR
+atexit.register(shutil.rmtree, _DATA_DIR, ignore_errors=True)
 
 
 @pytest.fixture(scope="session")
@@ -64,7 +72,7 @@ def db(db_engine):
 
 @pytest.fixture
 def client(db_engine, tmp_path, monkeypatch):
-    """TestClient на тестовой БД, AUTH_DEV_BYPASS=true, DATA_DIR=tmp_path."""
+    """TestClient на тестовой БД, AUTH_DEV_BYPASS=true, фото людей в tmp_path, план в DATA_DIR сессии."""
     from fastapi.testclient import TestClient
 
     from app.core import auth
@@ -74,6 +82,8 @@ def client(db_engine, tmp_path, monkeypatch):
 
     monkeypatch.setattr(auth, "settings", dataclasses.replace(auth.settings, auth_dev_bypass=True))
     monkeypatch.setattr(persons, "settings", dataclasses.replace(persons.settings, data_dir=str(tmp_path)))
+    shutil.rmtree(Path(_DATA_DIR) / "plan", ignore_errors=True)  # план живёт в DATA_DIR сессии (статика смонтирована при импорте)
+    (Path(_DATA_DIR) / "plan").mkdir(parents=True)
     factory = sessionmaker(bind=db_engine, expire_on_commit=False)
 
     def override():

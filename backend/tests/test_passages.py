@@ -1,14 +1,10 @@
 """Ф4: проход целиком (PRD §8.4, тесты §9: 1–7, 10–13, 16, 16а, 16б, 17)."""
-import base64
 import dataclasses
 import json
 import threading
 
 import httpx
 import pytest
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select, text
 
@@ -19,28 +15,10 @@ from app.core.config import settings
 from app.core.crypto import verify_es256
 from app.main import app
 from app.models import AccessEvent, PassSession, Shift
-from app.repositories import persons as persons_repo
+from helpers import Phone, activate, make_person
 
 FRAME = ("frames", ("f.jpg", b"jpeg-bytes", "image/jpeg"))
 UNAVAILABLE_TEXT = "Сервис распознавания недоступен, попробуйте позже"
-
-
-def _b64u(b: bytes) -> str:
-    return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
-
-
-class Phone:
-    """Телефон рабочего: ключ P-256 и подпись в формате WebCrypto (сырые r||s)."""
-
-    def __init__(self):
-        self.key = ec.generate_private_key(ec.SECP256R1())
-        n = self.key.public_key().public_numbers()
-        self.jwk = {"kty": "EC", "crv": "P-256", "x": _b64u(n.x.to_bytes(32, "big")), "y": _b64u(n.y.to_bytes(32, "big"))}
-        self.device_id: str | None = None
-
-    def sign(self, message: str) -> str:
-        r, s = decode_dss_signature(self.key.sign(message.encode(), ec.ECDSA(hashes.SHA256())))
-        return _b64u(r.to_bytes(32, "big") + s.to_bytes(32, "big"))
 
 
 def verify_result(status="ok", text_="Лицо подтверждено.", **facts) -> face.VerifyResult:
@@ -66,23 +44,6 @@ def fake_verify(monkeypatch):
     fake = Fake()
     monkeypatch.setattr(face, "verify_frames", fake)
     return fake
-
-
-def make_person(db, fio="Иванов Иван", emb="EMB", status="active", model="m1", template=True) -> int:
-    person = persons_repo.add(db, fio, None, None)
-    person.status = status
-    if template:
-        persons_repo.set_template(db, person.id, emb, model, f"hash-{emb}", f"{person.id}.jpg")
-    db.commit()
-    return person.id
-
-
-def activate(client, person_id: int, phone: Phone) -> None:
-    """Реальная активация: код -> /enroll с публичным ключом телефона."""
-    code = client.post(f"/api/persons/{person_id}/enroll-code").json()["code"]
-    r = client.post("/api/enroll", json={"code": code, "public_key_jwk": phone.jwk})
-    assert r.status_code == 200, r.text
-    phone.device_id = r.json()["device_id"]
 
 
 def start(client, direction="in") -> dict:

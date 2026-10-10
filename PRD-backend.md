@@ -391,12 +391,14 @@ def verify_es256(jwk: dict, message: bytes, sig_b64u: str) -> bool:
   - устройство активно;
   - подпись верна;
   - `payload.ts` не старше `LOCATION_MAX_AGE_S` и не из будущего (допуск 30 с);
-  - `payload.ts > devices.last_location_ts`, иначе 409 `REPLAYED` (защита от повтора); после приёма обновить `last_location_ts`;
+  - `payload.ts > devices.last_location_ts`, иначе 409 `REPLAYED` (защита от повтора); после приёма обновить `last_location_ts` (только у неотозванного устройства: отозванное между проверкой и обновлением → 403 `DEVICE_INVALID`);
   - до 200 точек в пачке, координаты в допустимых диапазонах.
 - `shift_id` определяет **сервер** по открытой смене владельца. Нет смены → 409 `NO_OPEN_SHIFT` «Нет открытой смены — геоданные не принимаются».
 - Точки с `ts` раньше `shift.started_at` или позже текущего момента отбрасываются.
 - Для каждой точки сразу считается `zone_id` (п. 8.7).
+- `accuracy` (если есть) — число от 0 до 100000.
 - → `{accepted: n, rejected: m}`
+- Коды ошибок `/locations`: 403 `DEVICE_INVALID` (устройство неизвестно/отозвано или подпись неверна), 409 `STALE_PAYLOAD` (`payload.ts` устарел или из будущего), 409 `REPLAYED`, 409 `NO_OPEN_SHIFT`, 422 `VALIDATION`.
 
 Симулятор перемещений будет ходить через этот же роут с виртуальными ключами. Никаких специальных путей для него не делай.
 
@@ -405,12 +407,15 @@ def verify_es256(jwk: dict, message: bytes, sig_b64u: str) -> bool:
 - `GET /events?from=&to=&result=&person_id=&direction=&limit=200&offset=` — `admin`, `manager` → `[{id, ts, person: {id,fio}|null, direction, result, reason_code, reason, controller_sub}]`, новые сверху.
 
 ### 8.7 План и зоны — `manager`
-- `PUT /site/plan` (multipart `image`, png/jpg) → `{image_url, width, height}`. `GET /site/plan` → то же + `calibration` + `zones`.
-- План раздаётся статикой по `/files/plan/...`.
+- `PUT /site/plan` (multipart `image`, png/jpg) → `{image_url, width, height}`. `GET /site/plan` → то же + `calibration` + `zones`. Формат определяется по заголовку файла; ширина и высота должны быть от 1 до 50000 px.
+- План раздаётся статикой по `/api/files/plan/...` (`image_url = "/api/files/plan/plan.<ext>"`). Префикс `/api/` обязателен: nginx фронта проксирует на бэкенд только `/api/`, путь `/files/...` до бэкенда не дошёл бы. При замене плана удаляется только файл прежнего плана (путь из `site_plan`), под эксклюзивной advisory-блокировкой геометрии.
+- Коды ошибок плана: 404 `PLAN_NOT_FOUND`, 422 `PLAN_UNSUPPORTED_FORMAT`, 413 `PLAN_TOO_LARGE`, 500 `PLAN_SAVE_FAILED`.
 - `PUT /site/calibration {points: [{px, py, lat, lon}] x 3}`:
   - аффинное преобразование `(lat, lon) → (px, py)` решается из 3 точек (numpy, система 6 уравнений);
+  - `px`, `py` — от 0 до 1e6, `lat` ∈ [-90, 90], `lon` ∈ [-180, 180]; нечисловые/нефинитные коэффициенты — тоже вырожденный случай;
   - вырожденный треугольник (почти коллинеарные точки) → 422 `CALIBRATION_DEGENERATE` «Точки калибровки лежат почти на одной прямой, выберите другие».
-- `PUT /zones {zones: [{id?, name, polygon: [[x,y],...]}]}` — полная замена набора. Полигон ≥ 3 точек, валиден в shapely. Зоны с одинаковыми именами запрещены.
+- `PUT /zones {zones: [{id?, name, polygon: [[x,y],...]}]}` — полная замена набора. Полигон ≥ 3 точек, валиден в shapely. Имя зоны обрезается по краям, пустое после обрезки → 422 `VALIDATION`. Зоны с одинаковыми именами запрещены.
+  - Коды ошибок: 422 `ZONE_NAME_DUPLICATE`, 422 `ZONE_POLYGON_INVALID`, 422 `ZONE_ID_INVALID` (неизвестный или повторяющийся `id`).
 - **После изменения калибровки или зон** — синхронный пересчёт `zone_id` для всех `location_points`. На объёмах хакатона это секунды; ограничение «нет пересчёта» не допускается.
 - Точка вне всех зон → `zone_id = NULL` («вне зон»). Если точка попала в несколько пересекающихся зон — берётся зона с меньшей площадью (правило записать в docstring).
 

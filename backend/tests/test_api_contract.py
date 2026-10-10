@@ -92,7 +92,8 @@ def test_public_routes_without_token(client, no_bypass):
     assert r.status_code == 400 and r.json()["code"] == "JWK_INVALID"
     r = client.post(f"/api/passages/{SID}/sign", json={"device_id": SID, "signature": "s"})  # дошли до БД: сессии нет
     assert r.status_code == 404 and r.json()["code"] == "SESSION_NOT_FOUND"
-    assert client.post("/api/locations", json={"device_id": SID, "payload": "{}", "signature": "s"}).status_code == 200
+    r = client.post("/api/locations", json={"device_id": SID, "payload": "{}", "signature": "s"})  # без токена: устройства нет
+    assert r.status_code == 403 and r.json()["code"] == "DEVICE_INVALID"
 
 
 def test_wrong_role_403(client, no_bypass):
