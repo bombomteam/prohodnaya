@@ -1,5 +1,5 @@
 import { config } from "../config.js";
-import { accessToken, configureAuthTransport } from "./auth.js";
+import { accessToken, configureAuthTransport, session } from "./auth.js";
 import { loadDevice, saveDevice, createDevice, signPassCode, signLocations } from "./device.js";
 import { demoApi } from "./demo-api.js";
 import { caseZoneById } from "./zones.js";
@@ -11,6 +11,25 @@ export class ApiError extends Error {
     this.status = status;
     this.code = code;
   }
+}
+
+// Бэкенд отдаёт адреса файлов относительно корня сервера (/api/files/plan/plan.png): достраиваем их от адреса API.
+// Принимаются только http(s)-адреса; всё остальное (javascript:, data:) отбрасывается.
+export function resolveApiUrl(value, base = config.apiBaseUrl, origin = globalThis.location?.href) {
+  if (typeof value !== "string" || !value.trim()) return null;
+  try {
+    const resolved = new URL(value.trim(), new URL(base, origin));
+    return resolved.protocol === "http:" || resolved.protocol === "https:" ? resolved.href : null;
+  } catch { return null; }
+}
+
+// Начало текущих суток в часовом поясе объекта, в виде ISO-времени с зоной (бэкенд принимает только aware-даты).
+export function startOfDayIso(now = new Date(), timeZone = config.timeZone || "Europe/Moscow") {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).formatToParts(now).map(part => [part.type, part.value]));
+  const wallClockAsUtc = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day), Number(parts.hour), Number(parts.minute), Number(parts.second));
+  const offsetMs = wallClockAsUtc - Math.floor(now.getTime() / 1000) * 1000;
+  return new Date(Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day)) - offsetMs).toISOString();
 }
 
 export async function request(path, { method = "GET", body, signal, auth = "operator", headers = {}, timeoutMs = config.requestTimeoutMs || 15000 } = {}) {
@@ -130,7 +149,7 @@ export const backendApi = {
     const value = await request(`/persons/${encodeURIComponent(id)}/enroll-code`, { method: "POST" });
     return { code: value.code, enrollUrl: value.enroll_url, expiresAt: value.expires_at };
   },
-  revokeDevice: () => { throw new ApiError("В текущем API нет маршрута отзыва устройства. Обратитесь к администратору бэкенда."); },
+  revokeDevice: () => { throw new ApiError("Отвязать телефон из этого окна пока нельзя. Обратитесь к администратору системы."); },
   deactivate: async id => {
     const body = new FormData(); body.set("status", "blocked");
     return mapPerson(await request(`/persons/${encodeURIComponent(id)}`, { method: "PATCH", body }));
@@ -166,7 +185,7 @@ export const backendApi = {
   },
   async enroll(code) {
     let device = await loadDevice();
-    if (device?.deviceId) throw new ApiError("Ключ уже сохранён на телефоне. Для замены нужен отзыв на сервере.");
+    if (device?.deviceId) throw new ApiError("Этот телефон уже привязан. Чтобы привязать заново, администратор должен сначала отвязать его.");
     if (!device) { device = await createDevice(); await saveDevice(device); }
     const value = await request("/enroll", { method: "POST", body: { code, public_key_jwk: device.publicKey }, auth: "none" });
     await saveDevice({ ...device, deviceId: value.device_id, person: value.person });
@@ -190,14 +209,26 @@ export const backendApi = {
     const payload = JSON.stringify({ ts: timestamp, points: [{ ts: timestamp, lat: position.latitude, lon: position.longitude, accuracy: position.accuracy }] });
     const signature = await signLocations(device, payload);
     const value = await request("/locations", { method: "POST", body: { device_id: device.deviceId, payload, signature }, auth: "none" });
-    if (!value.accepted) throw new ApiError("Сервер отклонил координату. Проверьте открытую смену.");
+    if (!value.accepted) throw new ApiError("Сервер не принял координаты. Проверьте, что смена открыта.");
     return value;
   },
   reportPeople: async () => (await request("/site/now")).map(mapSitePerson),
+  // Сводка обстановки. Списки и счётчики берём из доступных роли маршрутов; чего роль получить не может, остаётся null
+  // и показывается в интерфейсе как «нет данных», а не как ноль.
   async dashboard() {
-    const [people, events] = await Promise.all([request("/site/now"), request("/events?limit=6")]);
-    return { inside: people.map(mapSitePerson), totalEmployees: null, activeShifts: people.length,
-      deniedToday: null, recentAttempts: events.map(mapEvent) };
+    const optional = promise => promise.catch(() => null);
+    const [people, events, today, persons] = await Promise.all([
+      request("/site/now"), request("/events?limit=6"),
+      // Все попытки за сегодня одним запросом: из них считаем и разрешённые, и отказы.
+      optional(request(`/events?${new URLSearchParams({ from: startOfDayIso(), limit: "1000" })}`)),
+      session.roles.includes("admin") ? optional(request("/persons")) : null,
+    ]);
+    const todayEvents = Array.isArray(today) ? today : null;
+    return { inside: people.map(mapSitePerson), activeShifts: people.length,
+      totalEmployees: Array.isArray(persons) ? persons.length : null,
+      deniedToday: todayEvents ? todayEvents.filter(event => event.result === "deny").length : null,
+      allowedToday: todayEvents ? todayEvents.filter(event => event.result === "allow").length : null,
+      todayCapped: Boolean(todayEvents && todayEvents.length >= 1000), recentAttempts: events.map(mapEvent) };
   },
   async analytics(filters) {
     const query = queryFilters(filters);
@@ -215,13 +246,13 @@ export const backendApi = {
   site: async () => {
     const plan = await request("/site/plan");
     return { name: "План объекта", width: plan.width, height: plan.height, zones: plan.zones || [],
-      calibration: plan.calibration || [], planImageUrl: /^https?:\/\//.test(plan.image_url || "") ? plan.image_url : null,
+      calibration: plan.calibration || [], planImageUrl: resolveApiUrl(plan.image_url),
       rawImageUrl: plan.image_url || null };
   },
   updatePlan: image => { const body = new FormData(); body.set("image", image, image.name || "plan.png"); return request("/site/plan", { method: "PUT", body }); },
   updateCalibration: points => request("/site/calibration", { method: "PUT", body: { points } }),
   updateZones: zones => request("/zones", { method: "PUT", body: { zones } }),
-  updateSite: () => { throw new ApiError("Для нового API настройте план, калибровку и зоны отдельно."); },
+  updateSite: () => { throw new ApiError("План, калибровка и зоны настраиваются отдельно."); },
   ask: async question => assistantAnswer(await request("/assistant/ask", { method: "POST", body: { question } })),
   summary: async (from, to) => assistantAnswer(await request("/assistant/summary", { method: "POST", body: { date_from: from, date_to: to } })),
   assistantStatus: async () => {

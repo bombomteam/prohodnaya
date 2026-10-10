@@ -160,6 +160,7 @@ export const demoApi = {
     const state = read(); const inside = state.employees.filter(x => x.status === "inside");
     return { inside: clone(inside), totalEmployees: state.employees.length, activeShifts: inside.length,
       deniedToday: state.attempts.filter(x => x.outcome === "denied" && localDate(x.at) === today()).length,
+      allowedToday: state.attempts.filter(x => x.outcome === "allowed" && localDate(x.at) === today()).length,
       recentAttempts: clone(state.attempts.slice(0, 6)) };
   },
   async analytics(filters) {

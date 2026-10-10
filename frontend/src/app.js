@@ -32,36 +32,81 @@ const pageMeta = {
   guide: ["Как проверить кейс", "Пошагово: что нажать, чтобы проверить все пункты кейса"],
 };
 const nav = [
-  ["overview", "▦", "Обстановка"], ["employees", "♙", "Сотрудники"],
-  ["gate", "◉", "Проходная"], ["worker", "▣", "Телефон рабочего"],
-  ["analytics", "◇", "Аналитика"], ["assistant", "✦", "Помощник"],
-  ["journal", "☷", "Журнал"], ["guide", "✓", "Как проверить кейс"],
+  ["overview", "grid", "Обстановка"], ["employees", "users", "Сотрудники"],
+  ["gate", "camera", "Проходная"], ["worker", "phone", "Телефон рабочего"],
+  ["analytics", "chart", "Аналитика"], ["assistant", "spark", "Помощник"],
+  ["journal", "list", "Журнал"], ["guide", "check", "Как проверить кейс"],
 ];
 
 function esc(value) { return String(value ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]); }
-function dateTime(value) { return value ? new Intl.DateTimeFormat("ru-RU", { dateStyle: "short", timeStyle: "short", timeZone: config.timeZone || "Europe/Moscow" }).format(new Date(value)) : "—"; }
-function time(value) { return value ? new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit", timeZone: config.timeZone || "Europe/Moscow" }).format(new Date(value)) : "—"; }
+const validDate = value => Boolean(value) && !Number.isNaN(Date.parse(value));
+function dateTime(value) { return validDate(value) ? new Intl.DateTimeFormat("ru-RU", { dateStyle: "short", timeStyle: "short", timeZone: config.timeZone || "Europe/Moscow" }).format(new Date(value)) : "—"; }
+function time(value) { return validDate(value) ? new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit", timeZone: config.timeZone || "Europe/Moscow" }).format(new Date(value)) : "—"; }
 function duration(value) {
-  if (!value) return "—";
+  if (!validDate(value)) return "—";
   const mins = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 60000));
   return `${Math.floor(mins / 60)} ч ${String(mins % 60).padStart(2, "0")} мин`;
 }
+function hoursMinutes(total) {
+  const mins = Math.max(0, Math.round(Number(total) || 0));
+  return mins >= 60 ? `${Math.floor(mins / 60)} ч ${String(mins % 60).padStart(2, "0")} мин` : `${mins} мин`;
+}
 function statusBadge(status) { return status === "inside" ? '<span class="badge badge-green">На объекте</span>' : '<span class="badge badge-muted">Вне объекта</span>'; }
 function resultBadge(outcome) { if (outcome === "pending" || outcome === "error") return `<span class="badge badge-amber">${outcome === "pending" ? "Ожидание" : "Ошибка"}</span>`; return outcome === "allowed" ? '<span class="badge badge-green">Разрешён</span>' : '<span class="badge badge-red">Отказ</span>'; }
-function dirName(direction) { return direction === "entry" ? "Вход" : "Выход"; }
+function dirName(direction) { return direction === "entry" ? "Вход" : direction === "exit" ? "Выход" : "Проход"; }
 function initials(name) { return String(name || "?").split(" ").slice(0, 2).map(x => x[0] || "").join(""); }
 function notify(message, kind = "info") { state.toast = { message, kind }; render(); setTimeout(() => { if (state.toast?.message === message) { state.toast = null; render(); } }, 5000); }
 function errorMessage(error) {
   if (error?.name === "NotAllowedError") return "Подтверждение на устройстве отменено или время ожидания истекло. Повторите попытку.";
   if (error?.name === "SecurityError") return "Подтверждение устройства доступно только по HTTPS или на localhost.";
   if (error?.name === "InvalidStateError") return "Это устройство уже зарегистрировано. Обновите страницу или обратитесь к администратору.";
-  return error?.message || "Произошла ошибка. Повторите попытку.";
+  if (error instanceof SyntaxError) return "Не удалось разобрать введённые данные. Проверьте скобки, запятые и кавычки.";
+  // Английские и технические тексты браузера не показываем: человеку нужна понятная фраза.
+  const message = String(error?.message || "").trim();
+  return /[А-Яа-яЁё]/.test(message) ? message : "Не удалось выполнить действие. Повторите попытку.";
 }
+
+const ROLE_NAMES = { admin: "Администратор", manager: "Руководитель", controller: "Контролёр", worker: "Рабочий" };
+const userLabel = name => String(name || "").replace(/\b(admin|manager|controller|worker)\b/g, role => ROLE_NAMES[role]);
+function plural(n, forms) { const a = Math.abs(n) % 100, b = a % 10; return a > 10 && a < 20 ? forms[2] : b > 1 && b < 5 ? forms[1] : b === 1 ? forms[0] : forms[2]; }
+const num = value => value === null || value === undefined || value === "" || !Number.isFinite(Number(value)) ? null : Number(value);
+const fmtNum = value => new Intl.NumberFormat("ru-RU").format(value);
+
+// Линейные иконки одного набора вместо символов шрифта: одинаково выглядят на любом телефоне.
+const ICON_PATHS = {
+  grid: '<rect x="3.5" y="3.5" width="7" height="7" rx="1.6"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.6"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.6"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.6"/>',
+  users: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6"/><path d="M16 4.6a3.5 3.5 0 0 1 0 6.8"/><path d="M18 14.4c2 .8 3.5 2.7 3.5 5.6"/>',
+  badge: '<rect x="3" y="5" width="18" height="14" rx="2.5"/><circle cx="9" cy="11" r="2.2"/><path d="M5.8 16c.6-1.6 1.8-2.3 3.2-2.3s2.6.7 3.2 2.3"/><path d="M14.5 10h4M14.5 13.5h3"/>',
+  camera: '<path d="M4 8.5A1.5 1.5 0 0 1 5.5 7H8l1.2-2h5.6L16 7h2.5A1.5 1.5 0 0 1 20 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 17.5v-9Z"/><circle cx="12" cy="13" r="3.2"/>',
+  phone: '<rect x="7" y="3" width="10" height="18" rx="2.5"/><path d="M11 17.5h2"/>',
+  phoneoff: '<rect x="7" y="3" width="10" height="18" rx="2.5"/><path d="M11 17.5h2"/><path d="M4 4l16 16"/>',
+  chart: '<path d="M4 4v16h16"/><path d="M8.5 16v-4M12.5 16V8M16.5 16v-6"/>',
+  spark: '<path d="M11 3l1.9 5.3L18 10l-5.1 1.7L11 17l-1.9-5.3L4 10l5.1-1.7L11 3Z"/><path d="M18.5 15.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7.7-1.8Z"/>',
+  list: '<path d="M8.5 6H20M8.5 12H20M8.5 18H20"/><circle cx="4.5" cy="6" r="1"/><circle cx="4.5" cy="12" r="1"/><circle cx="4.5" cy="18" r="1"/>',
+  menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
+  check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+  door: '<path d="M10 4H6.5A1.5 1.5 0 0 0 5 5.5v13A1.5 1.5 0 0 0 6.5 20H10"/><path d="M13 8l4 4-4 4M17 12H9"/>',
+  shield: '<path d="M12 3l7 3v5.5c0 4.2-2.9 7.6-7 9.5-4.1-1.9-7-5.3-7-9.5V6l7-3Z"/><path d="M9.5 9.5l5 5M14.5 9.5l-5 5"/>',
+  lock: '<rect x="5" y="10.5" width="14" height="9.5" rx="2"/><path d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5"/>',
+  search: '<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4 4"/>',
+  refresh: '<path d="M20 11a8 8 0 0 0-14.3-4.4M4 4v3.6h3.6"/><path d="M4 13a8 8 0 0 0 14.3 4.4M20 20v-3.6h-3.6"/>',
+};
+const ico = name => `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${ICON_PATHS[name] || ""}</svg>`;
+function emptyState(icon, title, text, action = "") {
+  return `<div class="empty-state"><div class="empty-icon">${ico(icon)}</div><b>${esc(title)}</b><p>${esc(text)}</p>${action}</div>`;
+}
+// Карточка-метрика: число крупно, подпись, цветной акцент. Нет данных — понятная надпись, а не «null» или тире.
+function metricCard({ tone, icon, label, value, suffix = "", note = "", meter = null, tag = "div", attrs = "" }) {
+  const n = num(value);
+  const fill = meter === null ? null : Math.round(Math.min(1, Math.max(0, meter)) * 100);
+  return `<${tag} class="stat-card tone-${tone}" ${attrs}><span class="stat-icon">${ico(icon)}</span><span class="stat-label">${esc(label)}</span>${n === null ? '<strong class="stat-unknown">Нет данных</strong>' : `<strong>${fmtNum(n)}${esc(suffix)}</strong>`}${fill === null ? "" : `<span class="stat-meter" aria-hidden="true"><i style="width:${fill}%"></i></span>`}<small>${esc(note)}</small></${tag}>`;
+}
+const TAB_LABELS = { guide: "Проверка", worker: "Телефон" };
 
 async function refresh(page = state.page) {
   try {
     if (!allowedPages().includes(page)) return;
-    if (page === "overview") state.dashboard = await api.dashboard();
+    if (page === "overview") { state.dashboard = await api.dashboard(); state.dashboardAt = Date.now(); }
     if (page === "employees") {
       [state.employees, state.groups] = config.mode === "demo" ? [await api.employees(), []] : await Promise.all([api.employees(), api.groups()]);
     }
@@ -91,54 +136,94 @@ async function refresh(page = state.page) {
 function shell(content) {
   const [title, subtitle] = pageMeta[state.page];
   const visibleNav = nav.filter(([id]) => allowedPages().includes(id));
-  return `<div class="app-shell">
+  const demo = config.mode === "demo";
+  // Больше одного раздела — нижние вкладки; больше пяти — четыре вкладки и «Ещё» с полным списком.
+  const multi = visibleNav.length > 1, more = visibleNav.length > 5;
+  const tabs = more ? visibleNav.slice(0, 4) : visibleNav;
+  const moreActive = more && !tabs.some(([id]) => id === state.page);
+  return `<div class="app-shell page-${state.page} ${multi ? "has-tabs" : "no-tabs"}">
     <aside class="sidebar">
       <div class="brand"><div class="brand-mark">П</div><div><strong>ПРОХОДНАЯ</strong><small>Контроль объекта</small></div></div>
-      <a class="text-button" href="?worker=1" target="_blank" rel="noopener noreferrer">Открыть телефон рабочего ↗</a><div class="side-label">РАБОЧЕЕ ПРОСТРАНСТВО</div>
-      <nav class="side-nav">${visibleNav.map(([id, icon, label]) => `<button class="nav-link ${state.page === id ? "active" : ""}" data-page="${id}"><span class="nav-icon">${icon}</span>${label}</button>`).join("")}</nav>
-      <div class="sidebar-foot"><div class="connection-dot"></div><div><b>${config.mode === "demo" ? "Деморежим" : "Подключение к API"}</b><small>${config.mode === "demo" ? "Данные только для разработки" : esc(config.apiBaseUrl)}</small></div></div>
+      <div class="side-label">РАБОЧЕЕ ПРОСТРАНСТВО</div>
+      <nav class="side-nav">${visibleNav.map(([id, icon, label]) => `<button class="nav-link ${state.page === id ? "active" : ""}" data-page="${id}"><span class="nav-icon">${ico(icon)}</span>${label}</button>`).join("")}</nav>
+      <div class="sidebar-foot"><div class="connection-dot"></div><div><b>${demo ? "Деморежим" : "Система работает"}</b><small>${demo ? "Данные только в этом браузере" : "Данные обновляются автоматически"}</small></div></div>
     </aside>
-    <div class="main-column"><header class="topbar"><button class="mobile-menu-button" data-action="toggle-menu" aria-label="Открыть разделы" aria-expanded="${state.mobileMenu}">☰</button><div class="breadcrumbs">ОБЪЕКТ <span>/</span> ${esc(title.toUpperCase())}</div><div class="top-actions"><span class="today">${new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "long", year: "numeric" }).format(new Date())}</span><span>${esc(session.name)}</span><button class="button button-outline" data-action="logout">Выйти</button></div></header>
-      <main class="main-content"><div class="page-heading"><div><div class="eyebrow">СИСТЕМА КОНТРОЛЯ ДОСТУПА</div><h1>${esc(title)}</h1><p>${esc(subtitle)}</p></div>${state.page === "overview" ? '<button class="button button-outline" data-action="refresh">↻ Обновить данные</button>' : ""}</div>
-        ${config.mode === "demo" ? '<div class="demo-banner"><strong>Демонстрационный режим</strong><span>Примеры и результаты прохода имитируются в браузере. На защите переключите фронт на API: проверки лица, ECDSA и решения о проходе должны выполняться сервером.</span></div>' : ""}
-        ${session.dev ? '<div class="demo-banner"><strong>Локальная разработка</strong><span>Запросы идут без токена. Это работает только с AUTH_DEV_BYPASS=true на бэкенде и не подтверждает безопасность прохода.</span></div>' : ""}
-        ${config.mode === "demo" ? `<label>Демо-роль <select id="demo-role">${["admin", "manager", "controller", "worker"].map(r => `<option value="${r}" ${r === (session.kind === "worker" ? "worker" : session.roles[0]) ? "selected" : ""}>${r}</option>`).join("")}</select></label>` : ""}
-        ${state.loadError ? `<div class="error-banner"><span>${esc(state.loadError)}</span><button class="button button-outline" data-action="refresh">Повторить</button></div>` : ""}
+    <div class="main-column"><header class="topbar">${more ? `<button class="mobile-menu-button" data-action="toggle-menu" aria-label="Открыть разделы" aria-expanded="${state.mobileMenu}">${ico("menu")}</button>` : ""}<div class="topbar-brand"><span class="brand-mark">П</span><strong>ПРОХОДНАЯ</strong></div><div class="breadcrumbs">ОБЪЕКТ <span>/</span> ${esc(title.toUpperCase())}</div><div class="top-actions"><span class="today">${new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "long", year: "numeric" }).format(new Date())}</span><span class="user-name">${esc(userLabel(session.name))}</span><button class="button button-outline" data-action="logout">Выйти</button></div></header>
+      <main class="main-content"><div class="page-heading"><div><div class="eyebrow">СИСТЕМА КОНТРОЛЯ ДОСТУПА</div><h1>${esc(title)}</h1><p>${esc(subtitle)}</p></div>${state.page === "overview" ? `<button class="button button-outline" data-action="refresh">${ico("refresh")}<span>Обновить</span></button>` : ""}</div>
+        ${demo ? '<div class="demo-banner"><strong>Демонстрационный режим</strong><span>Данные и результаты прохода здесь условные и хранятся только в вашем браузере. Настоящую проверку телефона и лица выполняет сервер.</span></div>' : ""}
+        ${session.dev ? '<div class="demo-banner"><strong>Тестовый вход</strong><span>Вы вошли без пароля на этом компьютере. Это только для проверки и не подтверждает безопасность прохода.</span></div>' : ""}
+        ${demo ? `<label class="demo-role-switch"><span>Роль в демо</span><select id="demo-role">${["admin", "manager", "controller", "worker"].map(r => `<option value="${r}" ${r === (session.kind === "worker" ? "worker" : session.roles[0]) ? "selected" : ""}>${ROLE_NAMES[r]}</option>`).join("")}</select></label>` : ""}
+        ${state.loadError ? `<div class="error-banner" role="alert"><span>${esc(state.loadError)}</span><button class="button button-outline" data-action="refresh">Повторить</button></div>` : ""}
         ${content}</main></div>
-    <nav class="mobile-nav" aria-label="Основные разделы">${visibleNav.filter(([id]) => ["overview", "gate", "worker", "analytics"].includes(id)).map(([id, icon, label]) => `<button class="${state.page === id ? "active" : ""}" data-page="${id}"><span>${icon}</span><small>${label}</small></button>`).join("")}<button class="${["employees", "assistant", "journal"].includes(state.page) ? "active" : ""}" data-action="toggle-menu"><span>☰</span><small>Ещё</small></button></nav>
-    ${state.mobileMenu ? `<div class="mobile-menu-backdrop" data-action="close-menu"></div><div class="mobile-menu-panel" role="dialog" aria-label="Разделы приложения"><div class="mobile-menu-title"><b>Разделы</b><button data-action="close-menu" aria-label="Закрыть">×</button></div>${visibleNav.map(([id, icon, label]) => `<button class="mobile-menu-item ${state.page === id ? "active" : ""}" data-page="${id}"><span>${icon}</span>${label}</button>`).join("")}</div>` : ""}
-    ${state.toast ? `<div class="toast ${state.toast.kind}">${esc(state.toast.message)}</div>` : ""}
+    ${multi ? `<nav class="mobile-nav" aria-label="Основные разделы">${tabs.map(([id, icon, label]) => `<button class="${state.page === id ? "active" : ""}" data-page="${id}"><span>${ico(icon)}</span><small>${TAB_LABELS[id] || label}</small></button>`).join("")}${more ? `<button class="${moreActive ? "active" : ""}" data-action="toggle-menu"><span>${ico("menu")}</span><small>Ещё</small></button>` : ""}</nav>` : ""}
+    ${more && state.mobileMenu ? `<div class="mobile-menu-backdrop" data-action="close-menu"></div><div class="mobile-menu-panel" role="dialog" aria-label="Разделы приложения"><div class="mobile-menu-title"><b>Разделы</b><button data-action="close-menu" aria-label="Закрыть">×</button></div>${visibleNav.map(([id, icon, label]) => `<button class="mobile-menu-item ${state.page === id ? "active" : ""}" data-page="${id}"><span>${ico(icon)}</span>${label}</button>`).join("")}<p class="mobile-menu-user">Вы вошли как ${esc(userLabel(session.name))}</p></div>` : ""}
+    ${state.toast ? `<div class="toast ${state.toast.kind}" role="status">${esc(state.toast.message)}</div>` : ""}
   </div>`;
 }
 
 function eventRows(events, limit) {
-  if (!events?.length) return '<div class="empty">Событий пока нет. Новые попытки появятся здесь.</div>';
-  return `<div class="event-list">${events.slice(0, limit || events.length).map(event => `<div class="event-row"><div class="event-icon ${event.outcome}">${event.outcome === "allowed" ? "✓" : "×"}</div><div class="event-main"><b>${esc(event.employeeName || "Неизвестный человек")}</b><span>${dirName(event.direction)} · ${esc(event.reason)}</span></div><div class="event-side">${resultBadge(event.outcome)}<small>${dateTime(event.at)}</small></div></div>`).join("")}</div>`;
+  if (!events?.length) return emptyState("list", "Событий пока нет", "Каждая попытка пройти, удачная или нет, появится здесь.");
+  return `<div class="event-list ${limit ? "" : "event-list-full"}">${events.slice(0, limit || events.length).map(event => `<div class="event-row"><div class="event-icon ${event.outcome}">${event.outcome === "allowed" ? "✓" : "×"}</div><div class="event-main"><b>${esc(event.employeeName || "Неизвестный человек")}</b><span>${dirName(event.direction)} · ${esc(event.reason)}</span></div><div class="event-side">${resultBadge(event.outcome)}<small>${dateTime(event.at)}</small></div></div>`).join("")}</div>`;
 }
 
 function overview() {
   const d = state.dashboard;
   if (!d) return '<div class="panel loading">Загружаем обстановку…</div>';
-  return `<div class="stats-grid">
-    <div class="stat-card"><div class="stat-icon green">♙</div><span>На объекте сейчас</span><strong>${d.inside.length}</strong><small>${d.totalEmployees == null ? "По открытым сменам" : `из ${d.totalEmployees} сотрудников`}</small></div>
-    <div class="stat-card"><div class="stat-icon blue">◷</div><span>Открытых смен</span><strong>${d.activeShifts}</strong><small>активны сейчас</small></div>
-    <div class="stat-card"><div class="stat-icon red">⊘</div><span>Отказов сегодня</span><strong>${d.deniedToday ?? "—"}</strong><small>${d.deniedToday == null ? "Сервер не отдаёт этот агрегат" : "смотрите журнал"}</small></div>
-  </div><div class="two-columns"><section class="panel"><div class="panel-heading"><div><h2>Кто на объекте</h2><p>Сотрудники с открытой сменой</p></div><span class="count-pill">${d.inside.length}</span></div>
-    ${d.inside.length ? `<div class="people-list">${d.inside.map(x => `<div class="person-row"><div class="person-avatar">${esc(initials(x.name))}</div><div><b>${esc(x.name)}</b><small>${esc(x.role || x.company || "Сотрудник")}</small></div><div class="person-time"><b>${time(x.enteredAt)}</b><small>${duration(x.enteredAt)}</small></div></div>`).join("")}</div>` : '<div class="empty">На объекте сейчас никого нет.</div>'}
+  const inside = d.inside.length, total = num(d.totalEmployees);
+  const cards = [
+    metricCard({ tone: "green", icon: "users", label: "На объекте сейчас", value: inside,
+      note: total === null ? "по открытым сменам" : `из ${fmtNum(total)} ${plural(total, ["сотрудника", "сотрудников", "сотрудников"])}`, meter: total ? inside / total : null }),
+    total === null ? "" : metricCard({ tone: "blue", icon: "badge", label: "Всего сотрудников", value: total,
+      note: total === 0 ? "список пока пуст" : `${fmtNum(Math.max(0, total - inside))} вне объекта` }),
+    metricCard({ tone: "teal", icon: "door", label: "Проходов сегодня", value: d.allowedToday, suffix: d.todayCapped ? "+" : "",
+      note: num(d.allowedToday) === null ? "сервер не отдал журнал за сегодня" : "входов и выходов разрешено" }),
+    metricCard({ tone: "red", icon: "shield", label: "Отказов сегодня", value: d.deniedToday, suffix: d.todayCapped ? "+" : "", tag: "button", attrs: 'type="button" data-page="journal"',
+      note: num(d.deniedToday) === null ? "сервер не отдал журнал за сегодня" : d.deniedToday > 0 ? "открыть журнал →" : "отказов не было" }),
+  ].filter(Boolean);
+  const nobodyInside = total === 0
+    ? emptyState("users", "Пока никого нет", canEdit() ? "В системе нет ни одного сотрудника. Добавьте первого на вкладке «Сотрудники»." : "Заведите человека у администратора — после этого он появится в списках.",
+      canEdit() ? '<button class="button button-primary" data-page="employees">Перейти к сотрудникам</button>' : "")
+    : emptyState("door", "На объекте пока никого нет", "Сотрудники появятся здесь сразу после входа через проходную.");
+  return `<div class="stats-grid">${cards.join("")}</div><div class="two-columns"><section class="panel"><div class="panel-heading"><div><h2>Кто на объекте</h2><p>Сотрудники с открытой сменой</p></div><span class="count-pill">${inside}</span></div>
+    ${inside ? `<div class="people-list">${d.inside.map(x => `<div class="person-row"><div class="person-avatar">${esc(initials(x.name))}</div><div><b>${esc(x.name)}</b><small>${esc(x.role || x.company || "Сотрудник")}${x.lastZone ? ` · ${esc(x.lastZone)}` : ""}</small></div><div class="person-time"><b>${time(x.enteredAt)}</b><small>${duration(x.enteredAt)}</small></div></div>`).join("")}</div>` : nobodyInside}
   </section><section class="panel"><div class="panel-heading"><div><h2>Последние проходы</h2><p>Входы, выходы и отказы</p></div><button class="text-button" data-page="journal">Весь журнал →</button></div>${eventRows(d.recentAttempts, 6)}</section></div>`;
 }
 
+const EMPLOYEE_FILTERS = {
+  all: () => true,
+  inside: x => x.status === "inside",
+  phone: x => Boolean(x.enrolled),
+};
 function employees() {
-  return `<div class="content-toolbar"><div class="search-field"><span>⌕</span><input id="employee-search" placeholder="Поиск по имени или организации" aria-label="Поиск сотрудников"></div><button class="button button-primary" data-action="new-employee">＋ Добавить сотрудника</button></div>
-    <section class="panel table-panel"><div class="panel-heading"><div><h2>Список сотрудников</h2><p>Фото и статус поступают с сервера</p></div><span class="count-pill">${state.employees.length}</span></div>
-    <div class="table-wrap"><table><thead><tr><th>Сотрудник</th><th>Группа / должность</th><th>Статус</th><th>Телефон</th><th></th></tr></thead><tbody>${state.employees.map(x => `<tr data-search="${esc((x.name + " " + x.company).toLowerCase())}"><td><div class="table-person"><span class="person-avatar small">${esc(initials(x.name))}</span><b>${esc(x.name)}</b></div></td><td>${esc(x.company || "—")}<br><span class="muted">${esc(x.role || "—")}</span></td><td>${x.blocked ? '<span class="badge badge-red">Заблокирован</span>' : statusBadge(x.status)}</td><td>${x.enrolled ? '<span class="badge badge-green">Привязан</span>' : '<span class="badge badge-amber">Не привязан</span>'}</td><td><button class="text-button" data-action="edit-employee" data-id="${esc(x.id)}">Изменить →</button><button class="text-button" data-action="enroll-code" data-id="${esc(x.id)}">Enroll-код</button>${config.mode === "demo" ? `<button class="text-button" data-action="revoke-device" data-id="${esc(x.id)}">Отозвать ключ</button>` : ""}<button class="text-button" data-action="deactivate" data-id="${esc(x.id)}" ${x.blocked ? "disabled" : ""}>Деактивировать</button></td></tr>`).join("")}</tbody></table></div>${!state.employees.length ? '<div class="empty">Пока нет сотрудников. Добавьте первого человека.</div>' : ""}</section>
-    ${state.enrollCode ? `<div class="panel"><b>Одноразовый enroll-код</b><p>${esc(state.enrollCode.code)} · до ${dateTime(state.enrollCode.expiresAt)}</p>${state.enrollCode.enrollUrl ? `<p>Ссылка для телефона: <a href="${esc(state.enrollCode.enrollUrl)}" target="_blank" rel="noopener noreferrer">${esc(state.enrollCode.enrollUrl)}</a></p>` : ""}<p class="hint-line">Откройте ссылку на телефоне рабочего или введите код на его экране «Моё устройство». Передайте лично; код не является пропуском.</p></div>` : ""}
-    ${config.mode === "api" ? `<section class="panel"><h2>Новая группа</h2><form id="group-form" class="filters-form"><label>Название<input name="name" required></label><label>Родительская группа<select name="parentId"><option value="">Нет</option>${state.groups.map(group => `<option value="${esc(group.id)}">${esc(group.name)}</option>`).join("")}</select></label><button class="button button-outline">Добавить группу</button></form></section>` : ""}
-    <dialog id="employee-dialog" class="modal"><form id="employee-form" class="modal-form"><div class="modal-heading"><div><div class="eyebrow">АДМИНИСТРИРОВАНИЕ</div><h2 id="employee-dialog-title">Новый сотрудник</h2></div><button type="button" class="icon-button" data-action="close-dialog" aria-label="Закрыть">×</button></div><input type="hidden" name="employeeId"><label>ФИО <input name="name" required placeholder="Иванов Иван Иванович"></label><div class="form-grid">${config.mode === "api" ? `<label>Группа <select name="groupId"><option value="">Без группы</option>${state.groups.map(group => `<option value="${esc(group.id)}">${esc(group.name)}</option>`).join("")}</select></label>` : '<label>Организация <input name="company" placeholder="Название подрядчика"></label>'}<label>Должность <input name="role" placeholder="Специальность"></label></div><label class="upload-box"><span class="upload-icon">▧</span><b>Эталонное фото</b><small>Один человек в кадре, лицо видно чётко.</small><input name="referencePhoto" type="file" accept="image/jpeg,image/png,image/webp" id="photo-input"><span id="file-name" class="file-name">Выбрать файл</span></label>${state.employeeError ? `<div class="error-banner" role="alert">${esc(state.employeeError)}</div>` : ""}<div class="modal-actions"><button type="button" class="button button-outline" data-action="close-dialog">Отмена</button><button class="button button-primary" type="submit" ${state.busy ? "disabled" : ""}>Сохранить</button></div></form></dialog>`;
+  const list = state.employees, total = list.length;
+  const count = key => list.filter(EMPLOYEE_FILTERS[key]).length;
+  const inside = count("inside"), filter = EMPLOYEE_FILTERS[state.employeeFilter] ? state.employeeFilter : "all";
+  const query = String(state.employeeQuery || "").trim().toLocaleLowerCase("ru");
+  const shown = list.filter(x => EMPLOYEE_FILTERS[filter](x) && (!query || `${x.name} ${x.company} ${x.role}`.toLocaleLowerCase("ru").includes(query)));
+  const filterCard = (key, tone, icon, label, value, note) => metricCard({ tone, icon, label, value, note, tag: "button", attrs: `type="button" data-action="employee-filter" data-value="${key}" aria-pressed="${filter === key}"` });
+  const withPhone = count("phone");
+  const stats = `<div class="stats-grid employee-stats">${[
+    filterCard("all", "blue", "badge", "Всего сотрудников", total, total ? "заведены в системе" : "список пока пуст"),
+    filterCard("inside", "green", "users", "На объекте", inside, `${fmtNum(total - inside)} вне объекта`),
+    filterCard("phone", "teal", "phone", "Телефон привязан", withPhone, total && total > withPhone ? `ещё ${fmtNum(total - withPhone)} без телефона` : total ? "у всех привязан" : "список пока пуст"),
+  ].join("")}</div>`;
+  const rows = shown.map(x => `<tr><td class="c-person"><div class="table-person"><span class="person-avatar">${esc(initials(x.name))}</span><b>${esc(x.name)}</b></div></td><td class="c-org"><span class="org-main">${esc(x.company || "Без группы")}</span><span class="org-role">${esc(x.role || "должность не указана")}</span></td><td class="c-badges"><div class="badge-stack">${x.blocked ? '<span class="badge badge-red">Заблокирован</span>' : statusBadge(x.status)}${x.enrolled ? '<span class="badge badge-green">Телефон привязан</span>' : '<span class="badge badge-amber">Телефон не привязан</span>'}</div></td><td class="c-actions"><button class="text-button" data-action="edit-employee" data-id="${esc(x.id)}">Изменить</button><button class="text-button" data-action="enroll-code" data-id="${esc(x.id)}">Код для телефона</button>${config.mode === "demo" ? `<button class="text-button" data-action="revoke-device" data-id="${esc(x.id)}">Отозвать ключ</button>` : ""}<button class="text-button danger" data-action="deactivate" data-id="${esc(x.id)}" ${x.blocked ? "disabled" : ""}>Деактивировать</button></td></tr>`).join("");
+  const body = !total
+    ? emptyState("users", "Пока нет сотрудников", "Добавьте первого человека: понадобятся ФИО и чёткое фото лица.", '<button class="button button-primary" data-action="new-employee">＋ Добавить сотрудника</button>')
+    : !shown.length
+      ? emptyState("search", "Никого не найдено", "Измените запрос или сбросьте фильтр.", '<button class="button button-outline" data-action="employee-reset">Сбросить поиск и фильтр</button>')
+      : `<div class="table-wrap"><table class="employee-table"><thead><tr><th>Сотрудник</th><th>Группа и должность</th><th>Статус и телефон</th><th>Действия</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  const enroll = state.enrollCode;
+  return `<div class="content-toolbar"><div class="search-field"><span>${ico("search")}</span><input id="employee-search" type="search" value="${esc(state.employeeQuery || "")}" placeholder="Поиск по имени, группе, должности" aria-label="Поиск сотрудников" autocomplete="off"></div><button class="button button-primary" data-action="new-employee">＋ Добавить сотрудника</button></div>
+    ${stats}
+    ${enroll ? `<section class="panel enroll-card" id="enroll-card"><div class="enroll-main"><div class="eyebrow">ОДНОРАЗОВЫЙ КОД ДЛЯ ТЕЛЕФОНА${enroll.personName ? ` · ${esc(enroll.personName.toUpperCase())}` : ""}</div><strong class="enroll-code">${esc(enroll.code)}</strong><p>Действует до ${dateTime(enroll.expiresAt)}. Передайте код лично: сам по себе он не является пропуском.</p>${enroll.enrollUrl ? `<p>Ссылка для телефона: <a href="${esc(enroll.enrollUrl)}" target="_blank" rel="noopener noreferrer">${esc(enroll.enrollUrl)}</a></p>` : ""}<p class="hint-line">Откройте ссылку на телефоне рабочего или введите код на его экране в разделе «Моё устройство».</p></div><div class="enroll-actions">${globalThis.navigator?.clipboard ? '<button class="button button-outline" data-action="copy-enroll">Скопировать код</button>' : ""}<button class="button button-outline" data-action="dismiss-enroll">Скрыть</button></div></section>` : ""}
+    <section class="panel table-panel"><div class="panel-heading"><div><h2>Список сотрудников</h2><p>${query || filter !== "all" ? `Найдено ${fmtNum(shown.length)} из ${fmtNum(total)}` : "Фото и статус поступают с сервера"}</p></div><span class="count-pill">${shown.length}</span></div>${body}</section>
+    ${config.mode === "api" ? `<details class="panel group-panel"><summary>＋ Новая группа <small>бригада или подрядчик</small></summary><form id="group-form" class="filters-form"><label>Название<input name="name" required placeholder="Например: Монолит"></label><label>Родительская группа<select name="parentId"><option value="">Нет</option>${state.groups.map(group => `<option value="${esc(group.id)}">${esc(group.name)}</option>`).join("")}</select></label><button class="button button-outline">Добавить группу</button></form></details>` : ""}
+    <dialog id="employee-dialog" class="modal"><form id="employee-form" class="modal-form"><div class="modal-heading"><div><div class="eyebrow">АДМИНИСТРИРОВАНИЕ</div><h2 id="employee-dialog-title">Новый сотрудник</h2></div><button type="button" class="icon-button" data-action="close-dialog" aria-label="Закрыть">×</button></div><input type="hidden" name="employeeId"><label>ФИО <input name="name" required placeholder="Иванов Иван Иванович" autocomplete="off"></label><div class="form-grid">${config.mode === "api" ? `<label>Группа <select name="groupId"><option value="">Без группы</option>${state.groups.map(group => `<option value="${esc(group.id)}">${esc(group.name)}</option>`).join("")}</select></label>` : '<label>Организация <input name="company" placeholder="Название подрядчика"></label>'}<label>Должность <input name="role" placeholder="Специальность" autocomplete="off"></label></div><label class="upload-box"><span class="upload-icon">▧</span><b>Эталонное фото</b><small>Один человек в кадре, лицо видно чётко.</small><input name="referencePhoto" type="file" accept="image/jpeg,image/png,image/webp" id="photo-input"><span id="file-name" class="file-name">Выбрать файл</span></label>${state.employeeError ? `<div class="error-banner" role="alert">${esc(state.employeeError)}</div>` : ""}<div class="modal-actions"><button type="button" class="button button-outline" data-action="close-dialog">Отмена</button><button class="button button-primary" type="submit" ${state.busy ? "disabled" : ""}>Сохранить</button></div></form></dialog>`;
 }
 
 function gateOptions() {
-  return `<option value="">Выберите сотрудника</option>${state.employees.map(x => `<option value="${esc(x.id)}" ${x.id === state.gateEmployeeId ? "selected" : ""}>${esc(x.name)} · ID ${esc(x.id)}${x.blocked ? " · заблокирован" : !x.enrolled ? " · телефон не привязан" : ""}</option>`).join("")}`;
+  return `<option value="">Выберите сотрудника</option>${state.employees.map(x => `<option value="${esc(x.id)}" ${x.id === state.gateEmployeeId ? "selected" : ""}>${esc(x.name)}${/^\d+$/.test(String(x.id)) ? ` · №${esc(x.id)}` : ""}${x.blocked ? " · заблокирован" : !x.enrolled ? " · телефон не привязан" : ""}</option>`).join("")}`;
 }
 
 function targetedGate() {
@@ -148,18 +233,18 @@ function targetedGate() {
   return `<div class="gate-layout"><div class="gate-main">
     <section class="panel"><div class="step-heading"><span class="step-number">01</span><div><h2>Сотрудник и операция</h2><p>Найдите сотрудника по ФИО или номеру пропуска</p></div></div>
     <p class="hint-line">Выберите человека → он нажимает на телефоне «Я на проходной — получить код» → введите его 6 цифр → снимите лицо.</p>
-    <label>Поиск по пропуску<input id="gate-person-search" type="search" placeholder="ФИО или ID" autocomplete="off"></label>
+    <label>Поиск по пропуску<input id="gate-person-search" type="search" placeholder="ФИО или номер пропуска" autocomplete="off"></label>
     <label>Сотрудник<select id="gate-person-select">${gateOptions()}</select></label>
     <div class="segment"><button class="${state.direction === "entry" ? "selected" : ""}" data-action="direction" data-value="entry">↗ Вход на объект</button><button class="${state.direction === "exit" ? "selected" : ""}" data-action="direction" data-value="exit">↙ Выход с объекта</button></div>
     <button class="button button-primary wide" data-action="create-challenge" ${state.busy || !state.gateEmployeeId ? "disabled" : ""}>Отправить запрос работнику</button></section>
     <section class="panel"><div class="step-heading"><span class="step-number">02</span><div><h2>Код с телефона рабочего</h2><p>Рабочий подтверждает запрос в своём профиле и сообщает вам шесть цифр</p></div></div>
-    ${c ? `<div class="challenge-box"><div><b>${esc(c.personName)}</b><span>${dirName(c.direction)} · до ${time(c.expiresAt)}</span></div><span class="badge ${confirmed ? "badge-green" : expired ? "badge-red" : "badge-amber"}">${confirmed ? "Код подтверждён" : expired ? "Срок истёк" : "Ожидание кода"}</span></div>
+    ${c ? `<div class="challenge-box"><div><b>${esc(c.personName || "Сотрудник")}</b><span>${dirName(c.direction)} · до ${time(c.expiresAt)}</span></div><span class="badge ${confirmed ? "badge-green" : expired ? "badge-red" : "badge-amber"}">${confirmed ? "Код подтверждён" : expired ? "Срок истёк" : "Ожидание кода"}</span></div>
     ${!confirmed && !expired ? `<form id="gate-code-form"><label>Код рабочего<input name="code" inputmode="numeric" autocomplete="off" pattern="[0-9]{6}" minlength="6" maxlength="6" placeholder="000000" required></label><button class="button button-primary wide" ${state.busy ? "disabled" : ""}>Проверить код</button></form>` : ""}` : '<div class="empty compact">Выберите сотрудника и отправьте запрос.</div>'}</section>
     <section class="panel"><div class="step-heading"><span class="step-number">03</span><div><h2>Проверка личности по лицу</h2><p>После проверки кода снимите лицо выбранного сотрудника</p></div></div>
     <div class="camera-box">${state.faceUrl ? `<img src="${state.faceUrl}" alt="Кадр для сравнения с эталоном">` : '<video id="camera-video" autoplay playsinline muted></video><div class="camera-placeholder" id="camera-placeholder">Камера ещё не запущена</div>'}</div>
-    <p class="capture-settings">Задняя камера · 3 кадра · интервал 300 мс · JPEG 0.88</p><div class="camera-actions"><button class="button button-outline" data-action="start-camera" ${!confirmed || state.busy ? "disabled" : ""}>Включить камеру</button><button class="button button-outline" data-action="capture" ${state.cameraStream && confirmed && !state.busy ? "" : "disabled"}>Снять серию</button></div></section>
+    <p class="capture-settings">Снимем 3 кадра подряд. Держите лицо в кадре и не двигайтесь.</p><div class="camera-actions"><button class="button button-outline" data-action="start-camera" ${!confirmed || state.busy ? "disabled" : ""}>Включить камеру</button><button class="button button-outline" data-action="capture" ${state.cameraStream && confirmed && !state.busy ? "" : "disabled"}>Снять серию</button></div></section>
     <button class="button button-primary wide decision-button" data-action="decide-pass" ${confirmed && state.faceBlob && !state.busy ? "" : "disabled"}>Проверить лицо и получить решение</button>
-    ${result ? `<div class="result-card ${result.outcome}" role="status"><strong>${result.outcome === "allowed" ? "Проход разрешён" : "Отказ в проходе"}</strong><span>${esc(result.employeeName)} · ${dirName(result.direction)}</span><p>${esc(result.reason)}</p></div>` : ""}</div>
+    ${result ? `<div class="result-card ${result.outcome}" role="status"><strong>${result.outcome === "allowed" ? "Проход разрешён" : "Отказ в проходе"}</strong><span>${esc(result.employeeName || "Сотрудник")} · ${dirName(result.direction)}</span><p>${esc(result.reason)}</p></div>` : ""}</div>
     <aside class="gate-aside"><div class="info-card"><h3>Порядок прохода</h3><ol><li>Выберите человека по пропуску</li><li>Отправьте запрос на его телефон</li><li>Введите код, который назовёт рабочий</li><li>Снимите лицо и дождитесь решения</li></ol><a href="?worker=1" target="_blank" rel="noopener noreferrer">Открыть профиль рабочего ↗</a></div><div class="note-card"><h3>Живой просмотр камеры</h3><a class="button button-outline wide" href="https://console.195-209-220-254.sslip.io/console/" target="_blank" rel="noopener noreferrer">Открыть камеру ↗</a></div>${config.mode === "demo" ? '<div class="note-card"><b>Демонстрация</b><p>Код и решение имитируются. Подпись телефона, сравнение лица, журнал и открытие смены в рабочем режиме проверяет сервер.</p></div>' : '<div class="note-card"><b>Решение принимает сервер</b><p>Код проверяет сервер, лицо сравнивается с эталоном, смену открывает только разрешение системы.</p></div>'}</aside></div>`;
 }
 
@@ -188,7 +273,7 @@ function worker() {
   return `<div class="phone-page"><div class="phone-frame"><div class="phone-top"><span>●●●</span><span>ПРОХОДНАЯ</span><span>◕</span></div><div class="phone-content"><div class="phone-welcome">МОЯ СМЕНА<h2>Здравствуйте${selected ? `, ${esc(selected.name.split(" ")[0])}` : ""}</h2><p>${esc(selected?.company || "Ваш пропуск на объект")}</p></div>${config.mode === "demo" ? `<label class="demo-worker-select">Сотрудник для демонстрации<select id="worker-select">${state.employees.map(x => `<option value="${esc(x.id)}" ${x.id === state.workerId ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select></label>` : ""}
     <div class="shift-card"><div class="shift-card-top"><span>${apiMode ? "МОЯ СМЕНА" : "СТАТУС СМЕНЫ"}</span>${apiMode ? "" : selected?.status === "inside" ? "● НА ОБЪЕКТЕ" : "○ ВНЕ ОБЪЕКТА"}</div><strong>${apiMode ? "Статус смены видит контролёр" : selected?.status === "inside" ? "Смена открыта" : "Смена закрыта"}</strong><p>${apiMode ? "Вход и выход вы подтверждаете на проходной: назовите контролёру код." : selected?.status === "inside" ? `Вход в ${time(selected.enteredAt)} · ${duration(selected.enteredAt)} на объекте` : "Подтвердите вход на проходной, чтобы начать смену"}</p></div>
     ${workerConfirmation()}
-    <div class="phone-section"><h3>Моё устройство</h3><p>${selected?.enrolled ? "Устройство привязано к профилю" : "Сначала привяжите устройство. Регистрация по одноразовому enroll-коду, без логина и пароля."}</p>${selected?.enrolled ? "" : '<p class="hint-line">Код выдаёт администратор при заведении человека.</p>'}<label>Enroll-код<input id="enroll-code" autocomplete="off" placeholder="Код от администратора"></label><button class="button button-outline wide" data-action="enroll" ${selected?.enrolled || state.busy ? "disabled" : ""}>${selected?.enrolled ? "✓ Устройство привязано" : "Привязать устройство"}</button>${config.mode === "api" ? `<button class="text-button" data-action="reset-key">Заменить отозванный ключ</button>` : ""}</div>
+    <div class="phone-section"><h3>Моё устройство</h3><p>${selected?.enrolled ? "Устройство привязано к профилю" : "Сначала привяжите устройство. Привязка по одноразовому коду, без логина и пароля."}</p>${selected?.enrolled ? "" : '<p class="hint-line">Код выдаёт администратор при заведении человека.</p>'}<label>Код для телефона<input id="enroll-code" autocomplete="off" placeholder="Код от администратора"></label><button class="button button-outline wide" data-action="enroll" ${selected?.enrolled || state.busy ? "disabled" : ""}>${selected?.enrolled ? "✓ Устройство привязано" : "Привязать устройство"}</button>${config.mode === "api" ? `<button class="text-button" data-action="reset-key">Привязать телефон заново</button>` : ""}</div>
     <div class="phone-section"><h3>Геолокация</h3><p>Во время открытой смены отправляйте координаты серверу с интервалом ${Math.round((apiMode ? Math.max(30000, config.locationIntervalMs) : config.locationIntervalMs) / 1000)} сек. ${apiMode ? "Сервер принимает координаты только при открытой смене." : ""}</p><div class="location-status">${esc(state.locationStatus)}</div><button class="button button-outline wide" data-action="toggle-location" ${(apiMode ? selected?.enrolled : selected?.status === "inside") ? "" : "disabled"}>${state.locationWatch === null ? "Включить геолокацию" : "Остановить передачу"}</button></div></div></div><div class="phone-explainer"><div class="eyebrow">ИНТЕРФЕЙС РАБОЧЕГО</div><h2>Личный телефон вместо бумажного пропуска</h2><p>На телефоне рабочий подтверждает одноразовый запрос проходной. После входа его местоположение передаётся в пределах открытой смены.</p><div class="note-card"><b>Для работы камеры, ключа устройства и геолокации</b><p>Открывайте сайт по HTTPS или на localhost. Разрешения браузера выдаются пользователем.</p></div></div></div>`;
 }
 
@@ -196,15 +281,15 @@ function zoneMap(site, data, route) {
   const visits = route ? appearancesFromRoutes([route], data.zones).reverse() : [];
   const configured = CASE_ZONES.map(name => site.zones?.find(zone => caseZoneName(zone.name) === name));
   const width = Number(site.width), height = Number(site.height);
-  const hasPlan = Boolean(site.planImageUrl && width > 0 && height > 0 && configured.every(zone =>
-    Array.isArray(zone?.polygon) && zone.polygon.length >= 3 && zone.polygon.every(point =>
-      Array.isArray(point) && point.length === 2 && point.every(value => Number.isFinite(Number(value))))));
+  const hasOutline = zone => Array.isArray(zone?.polygon) && zone.polygon.length >= 3 && zone.polygon.every(point =>
+    Array.isArray(point) && point.length === 2 && point.every(value => Number.isFinite(Number(value))));
+  const hasPlan = Boolean(site.planImageUrl && width > 0 && height > 0);
   if (hasPlan) {
-    const polygons = configured.map((zone, index) => `<polygon points="${zone.polygon.map(point => `${Number(point[0])},${Number(point[1])}`).join(" ")}" class="plan-zone ${visits.some(visit => visit.zoneName === CASE_ZONES[index]) ? "visited" : ""}"><title>${esc(CASE_ZONES[index])}</title></polygon>`).join("");
+    const polygons = configured.map((zone, index) => !hasOutline(zone) ? "" : `<polygon points="${zone.polygon.map(point => `${Number(point[0])},${Number(point[1])}`).join(" ")}" class="plan-zone ${visits.some(visit => visit.zoneName === CASE_ZONES[index]) ? "visited" : ""}"><title>${esc(CASE_ZONES[index])}</title></polygon>`).join("");
     const points = (route?.points || []).filter(point => point.x != null && point.y != null && Number.isFinite(Number(point.x)) && Number.isFinite(Number(point.y)));
     const path = points.length > 1 ? `<polyline class="plan-route" points="${points.map(point => `${Number(point.x)},${Number(point.y)}`).join(" ")}"/>` : "";
     const dots = points.map((point, index) => `<circle class="plan-route-point" cx="${Number(point.x)}" cy="${Number(point.y)}" r="6"><title>Точка ${index + 1}: ${dateTime(point.at)}</title></circle>`).join("");
-    return `<div class="site-plan" style="aspect-ratio:${width}/${height}"><img src="${esc(site.planImageUrl)}" alt="План площадки"><svg viewBox="0 0 ${width} ${height}" aria-label="Зоны и маршрут работника">${polygons}${path}${dots}</svg></div><p class="metric-note">Контуры и маршрут взяты из плана и координат сервера.</p>`;
+    return `<div class="site-plan" style="aspect-ratio:${width}/${height}"><img src="${esc(site.planImageUrl)}" alt="План площадки"><svg viewBox="0 0 ${width} ${height}" aria-label="Зоны и маршрут работника">${polygons}${path}${dots}</svg></div><p class="metric-note">${configured.every(hasOutline) ? "Контуры зон и маршрут нанесены на план объекта." : "Контуры зон заданы не полностью. Их указывает руководитель в блоке «Настройка плана и зон»."}</p>`;
   }
   return `<div class="case-zone-map" role="list" aria-label="Три зоны из материалов кейса">${CASE_ZONES.map((name, index) => {
     const matches = visits.map((visit, step) => ({ visit, step })).filter(item => item.visit.zoneName === name);
@@ -226,18 +311,18 @@ function mapView() {
   const max = Math.max(1, ...zones.map(zone => zone.count));
   const zoneRows = zones.map(zone => {
     const level = !zone.available ? "unavailable" : zone.count === 0 ? "empty" : zone.level === "low" || zone.count / max < .35 ? "low" : "active";
-    const label = level === "unavailable" ? "Нет данных сервера" : level === "empty" ? "Нет посещений" : level === "low" ? "Малая активность" : "Активная зона";
-    return `<div class="zone-activity"><div><b>${esc(zone.name)}</b><small class="zone-activity-label ${level}">${label}</small></div><div class="zone-activity-track" aria-hidden="true"><span class="${level}" style="width:${zone.available && zone.count ? Math.max(5, zone.count / max * 100) : 0}%"></span></div><strong>${zone.available ? `${esc(new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 1 }).format(zone.count))} ${apiMode ? "мин" : "точек"}` : "—"}</strong></div>`;
+    const label = level === "unavailable" ? "Нет данных" : level === "empty" ? "Нет посещений" : level === "low" ? "Малая активность" : "Активная зона";
+    return `<div class="zone-activity"><div><b>${esc(zone.name)}</b><small class="zone-activity-label ${level}">${label}</small></div><div class="zone-activity-track" aria-hidden="true"><span class="${level}" style="width:${zone.available && zone.count ? Math.max(5, zone.count / max * 100) : 0}%"></span></div><strong>${zone.available ? `${esc(new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 1 }).format(zone.count))} ${apiMode ? "мин" : "точек"}` : ""}</strong></div>`;
   }).join("");
   const report = apiMode
-    ? `<section class="report-block"><h2>Табель сотрудника</h2><form id="person-report-form" class="filters-form"><label>Сотрудник <select name="personId" required><option value="">Выберите</option>${people.map(person => `<option value="${esc(person.id)}" ${state.personReport?.person?.id == person.id ? "selected" : ""}>${esc(person.name)}</option>`).join("")}</select></label><button class="button button-outline">Получить отчёт</button></form>${state.personReport ? `<div class="report-row"><b>${esc(state.personReport.person?.fio || "Сотрудник")}</b><span>${Number(state.personReport.days_present || 0)} дней</span><strong>${Number(state.personReport.total_worked_minutes || 0)} мин</strong></div>${(state.personReport.shifts || []).map(shift => `<div class="report-row"><b>${dateTime(shift.started_at)}</b><span>${dateTime(shift.ended_at)}</span><strong>${Number(shift.worked_minutes || 0)} мин</strong></div>`).join("")}` : '<p class="metric-note">API предоставляет табель отдельно по сотруднику.</p>'}</section>`
-    : `<section class="report-block"><h2>Табель по людям</h2>${state.shiftReport?.people.length ? state.shiftReport.people.map(person => `<div class="report-row"><b>${esc(person.employeeName)}</b><span>${person.shiftCount} смен</span><strong>${Math.floor(person.workedMinutes / 60)} ч ${String(person.workedMinutes % 60).padStart(2, "0")} мин</strong></div>`).join("") : '<div class="empty compact">Смен за выбранный период нет.</div>'}<h2>Смены</h2>${state.shiftReport?.shifts.length ? state.shiftReport.shifts.map(shift => `<div class="report-row"><b>${esc(shift.employeeName)}</b><span>${dateTime(shift.startedAt)} — ${shift.endedAt ? dateTime(shift.endedAt) : "сейчас"}</span><strong>${Math.floor(shift.workedMinutes / 60)} ч ${String(shift.workedMinutes % 60).padStart(2, "0")} мин</strong></div>`).join("") : '<div class="empty compact">Смен за выбранный период нет.</div>'}</section>`;
-  const settings = canManageSite() && apiMode ? `<section class="panel"><h2>Настройка трёх зон</h2><form id="plan-form" class="filters-form"><label>План площадки<input name="image" type="file" accept="image/png,image/jpeg,image/webp" required></label><button class="button button-outline">Загрузить план</button></form><form id="calibration-form" class="filters-form"><label>Калибровка: три точки JSON<textarea name="points" rows="5" required>${esc(JSON.stringify(site.calibration, null, 2))}</textarea></label><button class="button button-outline">Сохранить калибровку</button></form><form id="zones-form" class="filters-form">${CASE_ZONES.map((name, index) => `<label>${esc(name)}: полигон [[x,y],…]<textarea name="polygon${index}" rows="3" required>${esc(JSON.stringify(site.zones.find(zone => caseZoneName(zone.name) === name)?.polygon || []))}</textarea></label>`).join("")}<button class="button button-outline">Сохранить три зоны</button></form></section>` : "";
+    ? `<section class="report-block"><h2>Табель сотрудника</h2><form id="person-report-form" class="filters-form"><label>Сотрудник <select name="personId" required><option value="">Выберите</option>${people.map(person => `<option value="${esc(person.id)}" ${state.personReport?.person?.id == person.id ? "selected" : ""}>${esc(person.name)}</option>`).join("")}</select></label><button class="button button-outline">Получить отчёт</button></form>${state.personReport ? `<div class="report-row"><b>${esc(state.personReport.person?.fio || "Сотрудник")}</b><span>Дней на объекте: ${Number(state.personReport.days_present || 0)}</span><strong>${hoursMinutes(state.personReport.total_worked_minutes)}</strong></div>${(state.personReport.shifts || []).map(shift => `<div class="report-row"><b>${dateTime(shift.started_at)}</b><span>${dateTime(shift.ended_at)}</span><strong>${hoursMinutes(shift.worked_minutes)}</strong></div>`).join("")}` : '<p class="metric-note">Выберите сотрудника, чтобы увидеть его табель за выбранный период.</p>'}</section>`
+    : `<section class="report-block"><h2>Табель по людям</h2>${state.shiftReport?.people.length ? state.shiftReport.people.map(person => `<div class="report-row"><b>${esc(person.employeeName)}</b><span>${person.shiftCount} смен</span><strong>${hoursMinutes(person.workedMinutes)}</strong></div>`).join("") : '<div class="empty compact">Смен за выбранный период нет.</div>'}<h2>Смены</h2>${state.shiftReport?.shifts.length ? state.shiftReport.shifts.map(shift => `<div class="report-row"><b>${esc(shift.employeeName)}</b><span>${dateTime(shift.startedAt)} — ${shift.endedAt ? dateTime(shift.endedAt) : "сейчас"}</span><strong>${hoursMinutes(shift.workedMinutes)}</strong></div>`).join("") : '<div class="empty compact">Смен за выбранный период нет.</div>'}</section>`;
+  const settings = canManageSite() && apiMode ? `<details class="panel settings-panel"><summary>Настройка плана и зон <small>для руководителя</small></summary><form id="plan-form" class="filters-form"><label>План площадки<input name="image" type="file" accept="image/png,image/jpeg,image/webp" required></label><button class="button button-outline">Загрузить план</button></form><form id="calibration-form" class="filters-form"><label>Калибровка: три точки (JSON)<textarea name="points" rows="5" required>${esc(JSON.stringify(site.calibration, null, 2))}</textarea></label><button class="button button-outline">Сохранить калибровку</button></form><form id="zones-form" class="filters-form">${CASE_ZONES.map((name, index) => `<label>${esc(name)}: полигон [[x,y],…]<textarea name="polygon${index}" rows="3" required>${esc(JSON.stringify(site.zones.find(zone => caseZoneName(zone.name) === name)?.polygon || []))}</textarea></label>`).join("")}<button class="button button-outline">Сохранить три зоны</button></form></details>` : "";
   return `<div class="map-layout"><section class="panel map-panel"><div class="panel-heading"><div><h2>Схема площадки</h2><p>Бетономешалка, котлован и курилка</p></div></div>${zoneMap(site, data, route)}
     <section id="route-detail" class="route-detail" aria-live="polite">${selected ? `<h2>Карта перемещений: ${esc(selected.name)}</h2>${visits.length ? `<ol class="route-timeline">${visits.map(visit => `<li><b>${esc(visit.zoneName)}</b><time datetime="${esc(visit.at)}">${dateTime(visit.at)}</time></li>`).join("")}</ol>` : '<div class="empty compact">Для этого работника нет точек за выбранный период.</div>'}` : '<div class="empty compact">Нажмите на ФИО работника, чтобы открыть его маршрут.</div>'}</section>
-    <section class="report-block"><h2>Посещаемость трёх зон</h2><p class="metric-note">${esc(data.metric)}. Отсутствие данных сервера отличается от нулевой активности.</p>${zoneRows}</section>${report}</section>
+    <section class="report-block"><h2>Посещаемость трёх зон</h2><p class="metric-note">${esc(data.metric)}. «Нет данных» значит, что по зоне нет сведений, а «Нет посещений» — что в зоне никого не было.</p>${zoneRows}</section>${report}</section>
     <aside class="map-side"><section class="panel"><div class="panel-heading"><div><h2>Работники</h2><p>Откройте карту по ФИО</p></div></div><div class="worker-route-cards">${people.length ? people.map(person => { const count = data.routes.find(item => String(item.employeeId) === String(person.id))?.points.length || 0; return `<button type="button" class="worker-route-card ${state.selectedRouteId === String(person.id) ? "active" : ""}" data-action="show-route" data-id="${esc(person.id)}" aria-pressed="${state.selectedRouteId === String(person.id)}" aria-controls="route-detail"><span class="person-avatar small">${esc(initials(person.name))}</span><span><b>${esc(person.name)}</b><small>${count ? `${count} точек за период` : "Нет точек за период"}</small></span><span aria-hidden="true">→</span></button>`; }).join("") : '<div class="empty compact">Сотрудников пока нет.</div>'}</div></section>
-    <section class="panel"><div class="panel-heading"><div><h2>Фильтры</h2><p>Для схемы и маршрутов</p></div></div><form id="filters-form" class="filters-form"><div class="form-grid"><label>С даты<input type="date" name="from" value="${esc(state.filters.from)}" required></label><label>По дату<input type="date" name="to" value="${esc(state.filters.to)}" required></label></div><div class="form-grid"><label>Часы с<input type="number" name="hourFrom" min="0" max="23" value="${esc(state.filters.hourFrom)}"></label><label>Часы до<input type="number" name="hourTo" min="0" max="23" value="${esc(state.filters.hourTo)}"></label></div><label>Сотрудники<select name="employeeIds" multiple size="4">${people.map(person => `<option value="${esc(person.id)}" ${state.filters.employeeIds.split(",").includes(String(person.id)) ? "selected" : ""}>${esc(person.name)}</option>`).join("")}</select><small>Без выбора — все сотрудники. Ctrl для выбора нескольких.</small></label><button class="button button-primary wide">Показать данные</button></form></section>${settings}</aside></div>`;
+    <section class="panel"><div class="panel-heading"><div><h2>Фильтры</h2><p>Для схемы и маршрутов</p></div></div><form id="filters-form" class="filters-form"><div class="form-grid"><label>С даты<input type="date" name="from" value="${esc(state.filters.from)}" required></label><label>По дату<input type="date" name="to" value="${esc(state.filters.to)}" required></label></div><div class="form-grid"><label>Часы с<input type="number" name="hourFrom" min="0" max="23" value="${esc(state.filters.hourFrom)}"></label><label>Часы до<input type="number" name="hourTo" min="0" max="23" value="${esc(state.filters.hourTo)}"></label></div><label>Сотрудники<select name="employeeIds" multiple size="4">${people.map(person => `<option value="${esc(person.id)}" ${state.filters.employeeIds.split(",").includes(String(person.id)) ? "selected" : ""}>${esc(person.name)}</option>`).join("")}</select><small>Без выбора показаны все сотрудники. Можно отметить нескольких.</small></label><button class="button button-primary wide">Показать данные</button></form></section>${settings}</aside></div>`;
 }
 const ASSISTANT_SUGGESTIONS = ["Кто сейчас на объекте?", "Сводка за сегодня", "Кто вчера отработал меньше 8 часов?", "В какой зоне больше всего людей?", "Отказы за неделю и причины"];
 const ASSISTANT_STATUS = {
@@ -273,11 +358,18 @@ function assistantModelBlock() {
   return `<div class="assistant-model-block"><h3>Модель помощника</h3>${body}</div>`;
 }
 function assistant() {
-  return `<div class="assistant-layout"><section class="panel assistant-panel"><div class="assistant-intro"><span class="assistant-mark">✦</span><div><h2>Спросите об объекте</h2><p>Ответы строятся по данным сервера. Если данных нет, помощник должен сказать об этом прямо.</p></div></div><div class="suggestions">${ASSISTANT_SUGGESTIONS.map(q => `<button data-action="suggest-question" data-question="${esc(q)}">${esc(q)} →</button>`).join("")}</div><form id="question-form" class="question-form"><textarea name="question" rows="3" placeholder="Например: кто вчера отработал меньше четырёх часов?" required></textarea><button class="button button-primary" ${state.busy ? "disabled" : ""}>Отправить вопрос</button></form>${assistantAnswer(state.assistant)}</section><aside class="panel summary-panel"><div class="panel-heading"><div><h2>Сводка за период</h2><p>Текст для передачи заказчику</p></div></div><form id="summary-form" class="filters-form"><label>С даты<input type="date" name="from" value="${nowDate()}" required></label><label>По дату<input type="date" name="to" value="${nowDate()}" required></label><button class="button button-outline wide" ${state.busy ? "disabled" : ""}>Сформировать сводку</button></form>${assistantModelBlock()}<div class="note-card"><b>Числа считает система</b><p>Модель формулирует текст на основе проверенных агрегатов. Фронт показывает ответ и не подставляет вымышленные цифры.</p></div></aside></div>`;
+  return `<div class="assistant-layout"><section class="panel assistant-panel"><div class="assistant-intro"><span class="assistant-mark">✦</span><div><h2>Спросите об объекте</h2><p>Ответы строятся по данным сервера. Если данных нет, помощник должен сказать об этом прямо.</p></div></div><div class="suggestions">${ASSISTANT_SUGGESTIONS.map(q => `<button data-action="suggest-question" data-question="${esc(q)}">${esc(q)} →</button>`).join("")}</div><form id="question-form" class="question-form"><textarea name="question" rows="3" placeholder="Например: кто вчера отработал меньше четырёх часов?" required></textarea><button class="button button-primary" ${state.busy ? "disabled" : ""}>Отправить вопрос</button></form>${state.assistantPending ? '<div class="assistant-answer assistant-thinking" role="status">Помощник готовит ответ…</div>' : assistantAnswer(state.assistant)}</section><aside class="panel summary-panel"><div class="panel-heading"><div><h2>Сводка за период</h2><p>Текст для передачи заказчику</p></div></div><form id="summary-form" class="filters-form"><label>С даты<input type="date" name="from" value="${nowDate()}" required></label><label>По дату<input type="date" name="to" value="${nowDate()}" required></label><button class="button button-outline wide" ${state.busy ? "disabled" : ""}>Сформировать сводку</button></form>${assistantModelBlock()}<div class="note-card"><b>Цифры считает система</b><p>Модель только формулирует ответ. Если данных нет — помощник так и скажет.</p></div></aside></div>`;
 }
 
 function journal() {
-  return `<section class="panel"><div class="panel-heading"><div><h2>Все попытки прохода</h2><p>Успехи, отказы и понятные причины</p></div><span class="count-pill">${state.attempts.length}</span></div>${eventRows(state.attempts)}</section>`;
+  const all = state.attempts, filter = ["allowed", "denied"].includes(state.journalFilter) ? state.journalFilter : "all";
+  const denied = all.filter(event => event.outcome !== "allowed").length, allowed = all.length - denied;
+  const shown = filter === "all" ? all : all.filter(event => (event.outcome === "allowed") === (filter === "allowed"));
+  const tab = (key, label, n) => `<button class="${filter === key ? "selected" : ""}" data-action="journal-filter" data-value="${key}" aria-pressed="${filter === key}">${label} <span>${fmtNum(n)}</span></button>`;
+  const empty = all.length
+    ? emptyState("list", "В этой категории событий нет", "Выберите другой фильтр, чтобы увидеть остальные попытки.")
+    : emptyState("list", "Проходов пока не было", "Каждая попытка пройти, удачная или нет, появится в журнале с понятной причиной.");
+  return `<section class="panel"><div class="panel-heading"><div><h2>Все попытки прохода</h2><p>Успехи, отказы и понятные причины</p></div><span class="count-pill">${fmtNum(shown.length)}</span></div>${all.length ? `<div class="segment journal-filter" role="group" aria-label="Фильтр журнала">${tab("all", "Все", all.length)}${tab("allowed", "Разрешено", allowed)}${tab("denied", "Отказы", denied)}</div>` : ""}${shown.length ? eventRows(shown) : empty}</section>`;
 }
 
 function render() {
@@ -330,6 +422,11 @@ async function enterDemoRole(role, page) {
   state.page = allowedPages().includes(page) ? page : allowedPages()[0];
   state.mobileMenu = false; state.toast = null; state.loadError = null; render(); await refresh();
 }
+async function askAssistant(question) {
+  if (state.busy) return;
+  state.assistantPending = true;
+  try { await run(async () => { state.assistant = await api.ask(question); }); } finally { state.assistantPending = false; render(); }
+}
 async function run(action) { if (state.busy) return; state.busy = true; render(); try { await action(); } catch (error) { notify(errorMessage(error), "error"); } finally { state.busy = false; render(); } }
 
 root.addEventListener("click", async (event) => {
@@ -356,11 +453,13 @@ root.addEventListener("click", async (event) => {
   if (["new-employee", "edit-employee", "enroll-code", "revoke-device", "deactivate"].includes(action) && !canEdit()) { notify("Недостаточно прав", "error"); return; }
   if (action === "enroll-code" || action === "revoke-device" || action === "deactivate") {
     await run(async () => {
-      if (config.mode === "demo") throw new Error("Эта операция требует backend; демо не выпускает настоящие коды.");
-      if (action === "enroll-code") state.enrollCode = await api.enrollmentCode(button.dataset.id);
-      if (action === "revoke-device") { if (!confirm("Отозвать ключ телефона?")) return; await api.revokeDevice(button.dataset.id); }
+      if (config.mode === "demo") throw new Error("Настоящие коды выдаёт только сервер. В демо этот шаг недоступен.");
+      if (action === "enroll-code") state.enrollCode = { ...await api.enrollmentCode(button.dataset.id), personName: state.employees.find(x => x.id === button.dataset.id)?.name || "" };
+      if (action === "revoke-device") { if (!confirm("Отвязать телефон этого сотрудника?")) return; await api.revokeDevice(button.dataset.id); }
       if (action === "deactivate") { if (state.employees.find(x => x.id === button.dataset.id)?.status === "inside") throw new Error("Нельзя деактивировать человека с открытой сменой."); if (!confirm("Деактивировать сотрудника?")) return; await api.deactivate(button.dataset.id); }
       await refresh("employees");
+      // Код показан в карточке над списком: на телефоне прокручиваем к ней, иначе его не заметят.
+      if (action === "enroll-code") document.querySelector("#enroll-card")?.scrollIntoView({ behavior: "smooth", block: "start" });
     }); return;
   }
   if (action === "toggle-menu") { state.mobileMenu = !state.mobileMenu; render(); return; }
@@ -387,7 +486,7 @@ root.addEventListener("click", async (event) => {
     await run(async () => {
       clearChallenge(); state.challenge = await api.createChallenge(state.direction, state.gateEmployeeId);
       if (refusedAtOnce()) return;
-      notify(config.mode === "api" ? "Проход создан. Попросите рабочего нажать «Получить код» на телефоне и назвать шесть цифр." : "Запрос создан. Запрос отправлен выбранному работнику. Попросите его назвать код из профиля.", "success");
+      notify(config.mode === "api" ? "Проход создан. Попросите рабочего нажать «Получить код» на телефоне и назвать шесть цифр." : "Запрос отправлен работнику. Попросите его назвать код с экрана телефона.", "success");
     }); return;
   }
   if (action === "worker-get-code") {
@@ -442,14 +541,14 @@ root.addEventListener("click", async (event) => {
   }
   if (action === "reset-key") {
     if (state.worker?.employee?.status === "inside") { notify("Сначала завершите смену.", "error"); return; }
-    if (!confirm("Продолжайте только после отзыва прежнего ключа администратором и получения нового enroll-кода. Старый ключ будет удалён с этого устройства без возможности восстановления.")) return;
+    if (!confirm("Продолжайте только после того, как администратор отвяжет прежний телефон и выдаст новый код. Привязка на этом телефоне будет удалена без возможности восстановления.")) return;
     await run(async () => { stopLocation(); await forgetDevice(); state.worker = null; state.workerId = ""; await refresh("worker"); }); return;
   }
   if (action === "enroll") {
     const code = document.querySelector("#enroll-code")?.value.trim();
     await run(async () => {
       if (config.mode === "demo") await api.enroll(state.workerId);
-      else { if (!code) throw new Error("Введите enroll-код от администратора."); await api.enroll(code); }
+      else { if (!code) throw new Error("Введите код для телефона от администратора."); await api.enroll(code); }
       await refresh("worker"); notify("Устройство привязано.", "success");
     }); return;
   }
@@ -478,7 +577,21 @@ root.addEventListener("click", async (event) => {
     await run(async () => { const next = await api.setAssistantProvider(button.dataset.provider); state.assistantInfo = next.unsupported ? { ...state.assistantInfo, switchable: false } : next; });
     return;
   }
-  if (action === "suggest-question") { document.querySelector('#question-form [name="question"]').value = button.dataset.question; document.querySelector('#question-form [name="question"]').focus(); }
+  if (action === "suggest-question") {
+    // Подсказка сразу отправляет вопрос; текст остаётся в поле, чтобы его можно было поправить и спросить заново.
+    const field = document.querySelector('#question-form [name="question"]');
+    if (field) field.value = button.dataset.question;
+    await askAssistant(button.dataset.question); return;
+  }
+  if (action === "journal-filter") { state.journalFilter = button.dataset.value; render(); return; }
+  if (action === "employee-filter") { state.employeeFilter = state.employeeFilter === button.dataset.value ? "all" : button.dataset.value; render(); return; }
+  if (action === "employee-reset") { state.employeeFilter = "all"; state.employeeQuery = ""; render(); return; }
+  if (action === "dismiss-enroll") { state.enrollCode = null; render(); return; }
+  if (action === "copy-enroll") {
+    try { await navigator.clipboard.writeText(state.enrollCode?.code || ""); notify("Код скопирован.", "success"); }
+    catch { notify("Не удалось скопировать. Выделите код и скопируйте вручную.", "error"); }
+    return;
+  }
 });
 
 root.addEventListener("change", (event) => {
@@ -511,8 +624,7 @@ root.addEventListener("input", (event) => {
     return;
   }
   if (event.target.id !== "employee-search") return;
-  const query = event.target.value.toLowerCase();
-  document.querySelectorAll("tr[data-search]").forEach(row => { row.hidden = !row.dataset.search.includes(query); });
+  state.employeeQuery = event.target.value; render();
 });
 
 root.addEventListener("submit", async (event) => {
@@ -527,13 +639,13 @@ root.addEventListener("submit", async (event) => {
       catch (error) { state.employeeError = errorMessage(error); return; }
       await refresh("employees");
       document.querySelector("#employee-dialog")?.close();
-      notify(result.photoCheck?.message || "Данные сотрудника отправлены серверу.", "success");
+      notify(result.photoCheck?.message || "Данные сотрудника сохранены.", "success");
     }); return;
   }
   if (form.id === "group-form") {
     if (!canEdit()) { notify("Недостаточно прав", "error"); return; }
     const data = new FormData(form);
-    await run(async () => { await api.createGroup(String(data.get("name")).trim(), data.get("parentId")); await refresh("employees"); notify("Группа отправлена серверу.", "success"); }); return;
+    await run(async () => { await api.createGroup(String(data.get("name")).trim(), data.get("parentId")); await refresh("employees"); notify("Группа добавлена.", "success"); }); return;
   }
   if (form.id === "gate-code-form") {
     const code = String(new FormData(form).get("code") || "").trim();
@@ -576,12 +688,13 @@ root.addEventListener("submit", async (event) => {
         }
         await api.updateZones(zones);
       }
-      await refresh("analytics"); notify("Изменения отправлены серверу.", "success");
+      await refresh("analytics"); notify("Изменения сохранены.", "success");
     }); return;
   }
   if (form.id === "question-form" || form.id === "summary-form") {
     const data = new FormData(form);
-    await run(async () => { state.assistant = form.id === "question-form" ? await api.ask(data.get("question")) : await api.summary(data.get("from"), data.get("to")); });
+    if (form.id === "question-form") { await askAssistant(String(data.get("question") || "")); return; }
+    await run(async () => { state.assistant = await api.summary(data.get("from"), data.get("to")); });
   }
 });
 
@@ -610,7 +723,7 @@ setInterval(async () => {
       if (state.loadError !== message) { state.loadError = message; render(); }
     }
   }
-  if (state.page === "overview") await refresh("overview");
+  if (state.page === "overview" && Date.now() - (state.dashboardAt || 0) >= (config.mode === "api" ? Math.max(config.pollingMs, 10000) : config.pollingMs)) await refresh("overview");
   } finally { polling = false; }
 }, config.pollingMs);
 

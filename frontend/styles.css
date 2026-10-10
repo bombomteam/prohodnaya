@@ -102,6 +102,269 @@
 .camera-box video,.camera-box img{transform:none}
 @media(max-width:760px){.case-zone-map{padding:0 14px 14px;gap:7px}.case-zone-card{min-height:105px;padding:10px}.case-zone-card b{font-size:11px}.case-zone-card small{font-size:9px}.site-plan{margin:0 14px 14px}.route-detail{padding:16px 14px}}
 @media(max-width:420px){.case-zone-map{grid-template-columns:1fr}.case-zone-card{min-height:0}.route-timeline li{display:grid;gap:3px}}
+/* ===== Дизайн-проход: читаемые размеры, карточки-метрики, пустые состояния, мобильная вёрстка ===== */
+html{-webkit-text-size-adjust:100%}
+body{overflow-x:hidden;-webkit-tap-highlight-color:transparent}
+img,video,svg{max-width:100%}
+button,.button{touch-action:manipulation}
+:where(a,button,input,select,textarea,summary):focus-visible{outline:2px solid #1f9d5f;outline-offset:2px}
+.ico{width:20px;height:20px;flex:none;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+
+/* Размеры шрифтов: основной текст не мельче 12 px */
+.nav-link{font-size:13px}.nav-icon{display:grid;place-items:center;width:20px;height:20px}.nav-icon .ico{width:19px;height:19px}
+.side-label{font-size:10px}.brand small{font-size:11px}.sidebar-foot b{font-size:12px}.sidebar-foot small{font-size:11px}
+.breadcrumbs{font-size:11px}.user-name{font-size:13px;font-weight:700;color:#41584d}.topbar-brand{display:none}
+.page-heading p{font-size:14px}.eyebrow{font-size:11px}.panel-heading p{font-size:12px}.count-pill{font-size:12px}
+.demo-banner{font-size:13px}.error-banner{font-size:13px}
+.person-row b,.event-main b{font-size:13px}.person-row small,.event-main span{font-size:12px}
+.person-time b{font-size:13px}.person-time small,.event-side small{font-size:11px}
+.badge{font-size:11px;padding:5px 9px}.text-button{font-size:12px}.button{font-size:13px;padding:11px 16px}
+.empty{font-size:13px}.loading{font-size:14px}
+th{font-size:11px}table{font-size:13px}td .muted{font-size:12px}
+.search-field input,.filters-form input,.filters-form select,.filters-form textarea,.modal-form input,.question-form textarea,.phone-section input,.demo-worker-select select{font-size:14px}
+.modal-form label,.filters-form label,.demo-worker-select{font-size:12px}.filters-form label small{font-size:11px}
+.step-heading p{font-size:12px}.hint-line{font-size:13px}.challenge-box span:not(.badge){font-size:12px}
+.note-card{font-size:12px}.note-card b{font-size:13px}.info-card ol{font-size:13px}
+.shift-card-top{font-size:10px}.shift-card p{font-size:12px}.phone-section h3{font-size:14px}.phone-section p{font-size:12px}.location-status{font-size:12px}
+.zone-activity{font-size:13px}.zone-activity-label{font-size:11px}.report-row{font-size:12px}.metric-note{font-size:12px}
+.route-person,.worker-route-card b{font-size:12px}.worker-route-card small{font-size:11px}.route-timeline li{font-size:12px}
+.suggestions button{font-size:13px;min-height:40px;padding:9px 12px}.assistant-answer{font-size:14px}.assistant-intro p{font-size:13px}
+.toast{font-size:13px}
+.event-main span{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;white-space:normal;max-width:none}
+.event-list-full .event-main span{display:block;overflow:visible}
+
+/* Шапка и общий ритм страницы */
+.page-heading .button{display:inline-flex;align-items:center;gap:8px}.page-heading .button .ico{width:17px;height:17px}
+.main-content>.panel,.main-content>details.panel{margin-bottom:18px}
+.demo-role-switch{display:flex;align-items:center;gap:10px;margin:0 0 16px;font-size:13px;font-weight:700;color:#4d6358}
+.demo-role-switch select{min-height:42px;padding:8px 12px;border:1px solid #dfe8e1;border-radius:10px;background:#fff;font-size:14px;color:#18372a}
+.search-field span{display:grid;place-items:center;top:50%;transform:translateY(-50%);pointer-events:none}.search-field .ico{width:18px;height:18px}.search-field input{padding-left:40px}
+
+/* Карточки-метрики */
+.stats-grid{grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:16px;margin-bottom:20px}
+.stats-grid.employee-stats{grid-template-columns:repeat(3,minmax(0,1fr))}
+.stat-card{position:relative;overflow:hidden;--tone:#1f9d5f;--tone-bg:#e3f5e9;padding:20px 20px 18px 24px;text-align:left;font:inherit;color:inherit;width:100%}
+.stat-card::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--tone)}
+.stat-card .stat-icon{display:grid;place-items:center;width:40px;height:40px;margin:0;border-radius:12px;background:var(--tone-bg);color:var(--tone)}
+.stat-card .stat-icon .ico{width:22px;height:22px}
+.stat-card .stat-label{display:block;font-size:13px;font-weight:700;color:#5d7469;margin:14px 0 2px}
+.stat-card strong{display:block;font-size:36px;line-height:1.1;font-weight:800;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.stat-card strong.stat-unknown{font-size:16px;line-height:1.4;font-weight:700;letter-spacing:0;color:#8b9d94;margin:10px 0 2px}
+.stat-card small{display:block;font-size:12px;line-height:1.4;color:#7d8f86;margin-top:6px}
+.stat-card .stat-meter{display:block;height:6px;border-radius:6px;background:#e8efea;margin:10px 0 2px;overflow:hidden}
+.stat-card .stat-meter i{display:block;height:100%;border-radius:6px;background:var(--tone)}
+.tone-green{--tone:#1f9d5f;--tone-bg:#e3f5e9}.tone-blue{--tone:#3a6fc0;--tone-bg:#e8f0ff}.tone-teal{--tone:#14899a;--tone-bg:#e0f4f6}
+.tone-red{--tone:#d0584c;--tone-bg:#ffeeea}.tone-amber{--tone:#c58a1f;--tone-bg:#fff3db}
+button.stat-card{cursor:pointer;transition:border-color .15s,box-shadow .15s}
+button.stat-card:hover{border-color:var(--tone)}
+button.stat-card[aria-pressed="true"]{border-color:var(--tone);background:var(--tone-bg);box-shadow:0 0 0 2px var(--tone-bg)}
+button.stat-card[aria-pressed="true"] .stat-icon{background:#fff}
+
+/* Пустые состояния */
+.empty-state{display:grid;justify-items:center;gap:6px;padding:36px 22px;text-align:center}
+.empty-state .empty-icon{display:grid;place-items:center;width:56px;height:56px;border-radius:18px;background:#eaf5ee;color:#2f9a64;margin-bottom:6px}
+.empty-state .empty-icon .ico{width:28px;height:28px}
+.empty-state b{font-size:15px;color:#21443a}
+.empty-state p{margin:0;max-width:380px;font-size:13px;line-height:1.5;color:#7b8f85}
+.empty-state .button{margin-top:10px}
+
+/* Список сотрудников */
+.employee-table td{vertical-align:middle}
+.employee-table .person-avatar{height:38px;width:38px}
+.employee-table .table-person{white-space:normal}.employee-table .table-person b{font-size:14px}
+.employee-table tbody tr:hover{background:#f9fbf9}
+.org-main{display:block;font-weight:700;color:#2c4a3c}.org-role{display:block;font-size:12px;color:#8a9d92}
+.badge-stack{display:flex;flex-direction:column;align-items:flex-start;gap:6px}
+.employee-table .c-actions{white-space:nowrap}
+.text-button.danger{color:#b4473f}
+.text-button:disabled{color:#a9b6af}
+.enroll-card{display:flex;gap:16px;align-items:flex-start;justify-content:space-between;padding:20px 22px;border-color:#9bd9b3;background:linear-gradient(180deg,#f3fbf6,#fff)}
+.enroll-main{min-width:0}.enroll-main .eyebrow{margin-bottom:6px;overflow-wrap:anywhere}
+.enroll-code{display:block;font-size:34px;letter-spacing:.14em;color:#117a49;font-variant-numeric:tabular-nums;margin:4px 0 8px;overflow-wrap:anywhere}
+.enroll-main p{margin:0 0 6px;font-size:13px;color:#4b625d}.enroll-main a{overflow-wrap:anywhere;color:#188b57}
+.enroll-actions{display:flex;gap:8px;flex-wrap:wrap;flex:none}
+
+/* Сворачиваемые блоки: «Новая группа», настройка плана */
+details.panel>summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:10px;padding:14px 20px;min-height:52px;font-weight:800;font-size:14px;color:#21443a}
+details.panel>summary::-webkit-details-marker{display:none}
+details.panel>summary small{font-weight:600;color:#8a9d92;font-size:12px}
+details.panel>summary::after{content:"";margin-left:auto;width:8px;height:8px;border-right:2px solid #6f9686;border-bottom:2px solid #6f9686;transform:rotate(45deg);transition:transform .15s}
+details.panel[open]>summary::after{transform:rotate(-135deg)}
+details.panel[open]>summary{border-bottom:1px solid #edf2ee}
+details.panel>.filters-form:first-of-type{padding-top:16px}
+.settings-panel>.filters-form+.filters-form{border-top:1px solid #edf2ee;padding-top:16px}
+
+/* Журнал, помощник, камера */
+.segment button span{font-weight:700;opacity:.65;margin-left:4px}
+.panel>.segment.journal-filter{margin:0 20px 8px}
+.assistant-thinking{color:#5d7469;font-weight:700}
+.mobile-menu-user{margin:12px 4px 0;font-size:13px;color:#7b8f85}
+.camera-box video,.camera-box img{position:absolute;inset:0;width:100%;height:100%}
+.worker-pass-code{font-size:clamp(32px,10vw,44px)}
+
+/* Список сотрудников превращается в карточки, пока таблица не помещается (боковое меню съедает ширину) */
+@media(max-width:1280px){
+  .table-wrap{overflow:visible}
+  .employee-table,.employee-table tbody{display:block}
+  .employee-table thead{display:none}
+  .employee-table tbody{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;padding:4px 18px 18px}
+  .employee-table tr{display:flex;flex-wrap:wrap;align-items:center;align-content:flex-start;gap:8px;padding:14px;border:1px solid #e3ebe5;border-radius:14px;background:#fff}
+  .employee-table tbody tr:hover{background:#fff}
+  .employee-table td{display:block;padding:0;border:0;line-height:1.4}
+  .employee-table td.c-person{flex:1 1 100%}
+  .employee-table td.c-org{flex:1 1 100%;margin-top:-4px;padding-left:48px;font-size:13px}
+  .employee-table .org-main,.employee-table .org-role{display:inline;font-size:13px}
+  .employee-table .org-role::before{content:" · "}
+  .employee-table td.c-badges{flex:1 1 100%}
+  .badge-stack{flex-direction:row;flex-wrap:wrap}
+  .employee-table td.c-actions{flex:1 1 100%;display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-top:6px;white-space:normal}
+  .employee-table .c-actions .text-button{min-height:44px;padding:0 10px;border:1px solid #dbe7de;border-radius:10px;background:#fff;color:#1f7a50;font-size:13px;font-weight:700;text-align:center}
+  .employee-table .c-actions .text-button.danger{color:#b4473f;border-color:#f0cfc9}
+  .employee-table .c-actions .text-button:disabled{color:#a9b6af;border-color:#e6ece8;background:#f6f8f6}
+}
+@media(max-width:1100px){
+  .stats-grid.employee-stats{gap:12px}
+}
+
+/* Телефон и узкие экраны */
+@media(max-width:760px){
+  body{font-size:15px}
+  .main-content{padding:16px 14px calc(92px + env(safe-area-inset-bottom))}
+  .no-tabs .main-content{padding-bottom:28px}
+  .topbar{position:sticky;top:0;z-index:9;height:58px;padding:0 12px;gap:8px}
+  .topbar-brand{display:flex;align-items:center;gap:9px;min-width:0}
+  .topbar-brand .brand-mark{width:32px;height:32px;border-radius:10px;font-size:20px}
+  .topbar-brand strong{font-size:13px;letter-spacing:.1em;color:#102b25}
+  .breadcrumbs,.today,.user-name{display:none}
+  .top-actions{margin-left:auto}
+  .top-actions .button{min-height:44px;padding:0 16px}
+  .mobile-menu-button{width:44px;height:44px;border-radius:12px}.mobile-menu-button .ico{width:22px;height:22px}
+
+  .page-heading{display:flex;align-items:flex-start;gap:12px;margin-bottom:16px}
+  .page-heading>div{flex:1;min-width:0}
+  .page-heading .eyebrow{display:none}
+  .page-heading h1{font-size:25px;line-height:1.15;margin-bottom:4px}
+  .page-heading p{font-size:14px;color:#6f847a}
+  .page-heading .button{margin:0;width:auto;flex:none;min-height:44px;padding:0 14px}
+  .demo-banner,.error-banner{font-size:13px}
+  .error-banner{flex-wrap:wrap}
+  .demo-role-switch{flex-wrap:wrap}.demo-role-switch select{flex:1;min-width:160px;min-height:44px;font-size:16px}
+
+  .search-field input,.filters-form input:not([type=file]),.filters-form select:not([multiple]),.filters-form textarea,.modal-form input:not([type=file]),.modal-form select,.question-form textarea,.phone-section input,.demo-worker-select select,#gate-person-search,#gate-person-select{font-size:16px;min-height:48px;padding:11px 13px}
+  .search-field input{padding-left:42px}
+  .filters-form select[multiple]{font-size:16px;padding:6px}
+  .filters-form textarea,.question-form textarea{min-height:96px}
+  .modal-form label,.filters-form label,.demo-worker-select{font-size:13px}
+  .icon-button{width:44px;height:44px}
+  .button,.text-button,.segment button,.suggestions button{min-height:44px}
+  .button{font-size:14px}
+
+  .content-toolbar{flex-direction:column;gap:10px}
+  .content-toolbar .search-field{max-width:none;min-width:0;width:100%;flex:none}
+  .content-toolbar>.button{width:100%}
+
+  .stats-grid,.stats-grid.employee-stats{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+  .stat-card:last-child{grid-column:auto}
+  .stat-card:last-child:nth-child(odd){grid-column:1/-1}
+  .stat-card{padding:16px 14px 14px 18px}
+  .stat-card .stat-icon{width:36px;height:36px;border-radius:10px}
+  .stat-card .stat-label{font-size:13px;margin-top:12px}
+  .stat-card strong{font-size:32px}
+  .stat-card small{font-size:12px}
+
+  .panel-heading{padding:16px 16px 12px}
+  .panel-heading .text-button{padding:0 4px}
+  .count-pill{font-size:13px}
+  .person-row,.event-row{padding:13px 16px}
+  .person-row b,.event-main b{font-size:14px}
+  .person-row small,.event-main span{font-size:13px}
+  .person-time b{font-size:14px}.person-time small,.event-side small{font-size:12px}
+  .event-side{min-width:76px;display:flex;flex-direction:column;align-items:flex-end;gap:4px}
+  .event-side small{margin-top:0;white-space:normal;text-align:right}
+  .event-list-full .event-main span{-webkit-line-clamp:unset}
+  .badge{font-size:12px}
+  .empty-state{padding:30px 18px}
+  .table-panel{margin:0 -14px 18px;border-radius:0;border-left:0;border-right:0}
+  .employee-table tbody{display:block;padding:0}
+  .employee-table tr{border:0;border-top:1px solid #edf2ee;border-radius:0;padding:16px}
+  .employee-table td.c-actions{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .employee-table .c-actions .text-button:first-child:nth-last-child(odd){grid-column:auto}
+  .enroll-card{flex-direction:column;padding:18px 16px}
+  .enroll-code{font-size:30px}
+  .enroll-actions{width:100%}.enroll-actions .button{flex:1}
+  details.panel>summary{padding:14px 16px;min-height:56px}
+
+  .panel>.segment.journal-filter{margin:0 14px 8px}
+  .segment.journal-filter button{padding:10px 4px;font-size:13px}
+
+  .mobile-nav{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);grid-template-columns:none;gap:2px;padding:6px 6px max(6px,env(safe-area-inset-bottom))}
+  .mobile-nav button{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;min-height:56px;padding:4px 2px;border-radius:12px;font-weight:700;color:#7f968a}
+  .mobile-nav button.active{color:#0f7d4a;background:#e9f6ee}
+  .mobile-nav button span{display:grid;place-items:center;height:24px;font-size:0}
+  .mobile-nav .ico{width:24px;height:24px}
+  .mobile-nav small{font-size:11px;max-width:100%}
+  .mobile-menu-item{min-height:52px;font-size:15px}
+  .mobile-menu-item span{display:grid;place-items:center;width:24px;color:#4b9770}
+  .mobile-menu-item .ico{width:22px;height:22px}
+  .mobile-menu-title button{width:44px;height:44px}
+
+  .toast{left:12px;right:12px;bottom:calc(78px + env(safe-area-inset-bottom));max-width:none;font-size:14px;padding:14px 16px}
+  .no-tabs .toast{bottom:calc(16px + env(safe-area-inset-bottom))}
+
+  .gate-main .panel{padding:16px}
+  .step-heading p{font-size:13px}
+  .camera-box{height:auto;aspect-ratio:4/3;min-height:210px;max-height:62vh}
+  .camera-placeholder{font-size:13px;text-align:center;padding:0 16px}
+  .capture-settings{font-size:13px}
+  .challenge-box strong{font-size:26px}
+  .result-card{font-size:14px}
+  .gate-aside{order:2}
+  .info-card ol{font-size:14px}
+
+  .map-grid{margin:0 13px}
+  .metric-note,.report-row,.zone-activity{font-size:13px}
+  .zone-activity-label,.worker-route-card small{font-size:12px}
+  .worker-route-card{min-height:56px}.worker-route-card b{font-size:14px}
+  .route-timeline li{font-size:13px}
+  .site-plan{min-height:180px}
+  .filters-form .form-grid{grid-template-columns:1fr 1fr}
+
+  .suggestions{display:grid;gap:8px}
+  .suggestions button{text-align:left;font-size:14px;padding:10px 14px}
+  .question-form{justify-items:stretch}.question-form .button{width:100%}
+  .assistant-panel{padding:18px 16px}
+  .assistant-answer{padding:15px}
+  .summary-panel .filters-form .button{width:100%}
+
+  .modal{width:calc(100% - 20px);max-height:calc(100dvh - 20px);border-radius:18px}
+  .upload-box input{font-size:14px;max-width:100%}
+
+  /* Телефон рабочего: на телефоне это сам экран, а не картинка телефона */
+  .page-worker .page-heading{display:none}
+  .page-worker .main-content{padding-top:12px}
+  .phone-page{display:block;padding:0}
+  .phone-frame{max-width:none;width:100%;margin:0;border:0;border-radius:0;background:transparent;box-shadow:none;overflow:visible}
+  .phone-top{display:none}
+  .phone-content{padding:0;max-height:none;overflow:visible}
+  .phone-welcome h2{font-size:26px;margin:4px 0}
+  .phone-welcome p{font-size:14px}
+  .shift-card{margin:14px 0;border-radius:16px;padding:20px}
+  .shift-card strong{font-size:20px}.shift-card p{font-size:13px}
+  .phone-section{margin-top:14px;padding:18px;background:#fff;border:1px solid #e5ebe6;border-radius:16px;box-shadow:0 3px 14px #193b2810}
+  .phone-section h3{font-size:16px}
+  .phone-section p{font-size:14px}
+  .phone-section .button{margin-top:6px}
+  .location-status{font-size:13px}
+  .worker-pass-code{font-size:clamp(36px,12vw,48px)}
+}
+@media(max-width:380px){
+  .main-content{padding-left:12px;padding-right:12px}
+  .table-panel{margin-left:-12px;margin-right:-12px}
+  .stat-card strong{font-size:28px}
+  .filters-form .form-grid{grid-template-columns:1fr}
+  .top-actions .button{padding:0 12px}
+  .topbar-brand strong{font-size:12px}
+}
 .hint-line{margin:6px 0 12px;font-size:12px;line-height:1.45;color:#4b625d}
 .assistant-answer .badge{margin-left:6px;vertical-align:middle;white-space:normal}.assistant-facts{margin:12px 0 8px;font-size:11px}.assistant-facts summary{cursor:pointer;font-weight:800;color:#338458}.assistant-facts ul{margin:8px 0 0;padding-left:18px;line-height:1.7}.assistant-facts pre{margin:8px 0 0;padding:10px;background:#fff;border:1px solid #deebe1;border-radius:7px;overflow:auto;font-size:10px;white-space:pre-wrap}.assistant-model{display:block;margin-top:8px}.assistant-model-block{padding:0 21px 18px}.assistant-model-block p{margin:0 0 8px;font-size:11px}.assistant-model-block .muted{color:#91a198}.assistant-model-block .segment{margin:10px 0 0}
 
