@@ -1,4 +1,4 @@
-# Стенд «Проходной»: frontend и Keycloak; backend и БД приложения добавляются отдельно.
+# Стенд «Проходной»: frontend, Keycloak, backend и db (db и backend — профиль backend).
 #
 # Запуск из корня репозитория:
 #   cp .env.example .env        # при необходимости поправить значения
@@ -89,8 +89,61 @@ services:
     networks:
       - edge
 
+  db:
+    # Без <<: *hardened: postgres пишет в свои каталоги и при старте меняет владельца файлов.
+    image: postgres:16
+    profiles: [backend]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+      POSTGRES_DB: ${POSTGRES_DB:-}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - edge
+
+  backend:
+    <<: *hardened
+    profiles: [backend]
+    build:
+      context: ./backend
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+    # Пишет только в /data (фото эталонов, план) и /tmp.
+    volumes:
+      - data:/data
+    tmpfs:
+      - /tmp:size=64m,mode=1777,noexec,nosuid,nodev
+    ports:
+      - "${BACKEND_BIND:-127.0.0.1}:${BACKEND_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"]
+      interval: 30s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
+    networks:
+      - edge
+
+  # Сюда добавится ollama (его ведёт другой участник).
+
 volumes:
   keycloak_data: {}
+  pgdata: {}
+  data: {}
 
 networks:
   edge: {}

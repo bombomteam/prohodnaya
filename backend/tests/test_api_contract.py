@@ -50,11 +50,9 @@ def test_openapi_has_all_paths(bypass):
 
 
 def test_stub_routes_ok(bypass):
-    assert client.get("/api/groups").status_code == 200
+    # groups/persons/enroll уже реальные (Ф3) и покрыты в test_persons_enroll.py
     r = client.get("/api/analytics/heatmap?from=2026-01-01&to=2026-01-01")
     assert r.status_code == 200 and r.json()["zones"][1]["level"] == "empty"
-    r = client.post("/api/persons", data={"fio": "Тест"}, files={"photo": ("a.jpg", b"x", "image/jpeg")})
-    assert r.status_code == 200 and r.json()["fio"]
 
 
 def test_face_requires_exactly_three_frames(bypass):
@@ -83,7 +81,9 @@ def test_garbage_token_401(no_bypass):
 
 
 def test_public_routes_without_token(no_bypass):
-    assert client.post("/api/enroll", json={"code": "c", "public_key_jwk": {}}).status_code == 200
+    # /enroll не требует токена: до БД дело не доходит, пустой ключ отвергается как JWK_INVALID
+    r = client.post("/api/enroll", json={"code": "c", "public_key_jwk": {}})
+    assert r.status_code == 400 and r.json()["code"] == "JWK_INVALID"
     assert client.post(f"/api/passages/{SID}/sign", json={"device_id": SID, "signature": "s"}).status_code == 200
     assert client.post("/api/locations", json={"device_id": SID, "payload": "{}", "signature": "s"}).status_code == 200
 
