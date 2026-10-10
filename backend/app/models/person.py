@@ -1,8 +1,7 @@
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import REAL, CheckConstraint, DateTime, ForeignKey, Text, func, text
-from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Text, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -32,6 +31,8 @@ class FaceTemplate(Base):
     __tablename__ = "face_templates"
 
     person_id: Mapped[int] = mapped_column(ForeignKey("persons.id", ondelete="CASCADE"), primary_key=True)
-    embedding: Mapped[list[float]] = mapped_column(ARRAY(REAL))
+    embedding: Mapped[str] = mapped_column(Text)  # base64 float32 от модуля face, бэкенд не разбирает
+    model_version: Mapped[str] = mapped_column(Text)
+    reference_hash: Mapped[str] = mapped_column(Text)
     photo_path: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

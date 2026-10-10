@@ -29,3 +29,10 @@ def test_second_open_shift_rejected(db_engine):
         with pytest.raises(IntegrityError):
             conn.execute(ins, {"p": pid})
         conn.rollback()
+
+
+def test_migration_face_templates_v1_columns(db_engine):
+    cols = {c["name"]: c for c in inspect(db_engine).get_columns("face_templates")}
+    for name in ("embedding", "model_version", "reference_hash"):
+        assert name in cols and not cols[name]["nullable"]
+    assert str(cols["embedding"]["type"]) == "TEXT"

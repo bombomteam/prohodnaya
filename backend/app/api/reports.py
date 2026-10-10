@@ -37,6 +37,6 @@ def person_report(
     # STUB
     return PersonReportOut(
         person=_PERSON, shifts=[_shift()], total_worked_minutes=480, days_present=1, zone_minutes=_ZONES,
-        denials=[DenialOut(ts=datetime.now(timezone.utc), direction="in", reason_code="FACE_MISMATCH",
-                           reason="Лицо не совпадает с владельцем телефона")],
+        denials=[DenialOut(ts=datetime.now(timezone.utc), direction="in", reason_code="FACE_FACE_MISMATCH",
+                           reason="Лицо не совпадает с эталоном.")],
     )
