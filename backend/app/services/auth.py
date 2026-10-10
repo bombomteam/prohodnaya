@@ -80,7 +80,10 @@ def get_config() -> AuthConfigOut:
     """Адрес страницы входа Keycloak (внешний URL, его открывает браузер)."""
     if not settings.kc_public_url:
         raise _unavailable()
-    return AuthConfigOut(authorizationEndpoint=f"{settings.kc_public_url}/realms/construction/protocol/openid-connect/auth")
+    return AuthConfigOut(
+        authorizationEndpoint=f"{settings.kc_public_url}/realms/construction/protocol/openid-connect/auth",
+        demoLogin=settings.demo_login,
+    )
 
 
 def exchange(code: str, code_verifier: str, redirect_uri: str) -> TokensOut:
@@ -92,6 +95,29 @@ def exchange(code: str, code_verifier: str, redirect_uri: str) -> TokensOut:
         "code": code, "code_verifier": code_verifier, "redirect_uri": redirect_uri,
     })
     return _tokens(r, "token", ApiError("AUTH_CODE_INVALID", "Сессия входа устарела, войдите заново", 401))
+
+
+def demo_login(role: str) -> TokensOut:
+    """Демо-вход на стенде без пароля у пользователя: сервер сам берёт пароль демо-учётки и получает токены у Keycloak (ROPC).
+
+    Токен выдаёт и подписывает Keycloak, проверка и ответ те же, что в exchange. Выключено флагом DEMO_LOGIN (404).
+    Любой сбой Keycloak (отказ, недоступность, плохой токен) = 502; роли, пароль и токены в лог не пишем.
+    """
+    if not settings.demo_login:
+        raise ApiError("DEMO_LOGIN_DISABLED", "Демо-вход выключен", 404)
+    failed = ApiError("AUTH_PROVIDER_ERROR", "Не удалось войти через сервер авторизации, попробуйте позже", 502)
+    try:
+        r = _kc_post("token", {
+            "grant_type": "password", "client_id": _CLIENT_ID, "scope": "openid",
+            "username": settings.demo_users[role], "password": settings.demo_passwords[role],
+        })
+        out = _tokens(r, "token", failed)
+    except ApiError as e:
+        raise failed from e
+    if role not in out.user.roles:
+        log.error("keycloak демо-вход: у учётки нет роли %s", role)
+        raise failed
+    return out
 
 
 def refresh(refresh_token: str) -> TokensOut:

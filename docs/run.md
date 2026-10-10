@@ -31,6 +31,11 @@ cp .env.example .env
 | `PUBLIC_APP_URL` | адрес фронта, который увидит телефон: из него строится ссылка активации `/enroll?code=...` |
 | `KC_PUBLIC_URL`, `PANEL_REDIRECT_URI`, `PANEL_ORIGIN` | при HTTPS-адресах фронта и Keycloak заменить на них (до первого импорта realm) |
 | `AUTH_DEV_BYPASS` | оставить `false`. `true` — только локальная разработка, вход без токена |
+| `DEMO_LOGIN` | `false` по умолчанию. `true` — на стенде для жюри: `POST /api/auth/demo` выдаёт токены роли без ввода пароля (Keycloak всё равно подписывает токен). В проде выключить |
+| `DEMO_ADMIN_PASSWORD`, `DEMO_MANAGER_PASSWORD`, `DEMO_CONTROLLER_PASSWORD` | пароли демо-учёток для сервера; значения те же, что `KC_ADMIN1_PASSWORD`, `KC_MANAGER1_PASSWORD`, `KC_CONTROLLER1_PASSWORD`. Фронту не отдаются |
+| `DEMO_ADMIN_USER`, `DEMO_MANAGER_USER`, `DEMO_CONTROLLER_USER` | логины демо-учёток, по умолчанию `admin1`, `manager1`, `controller1` |
+
+Демо-вход требует `directAccessGrantsEnabled: true` у клиента `panel` (уже в импорте realm; в живом realm включить в консоли Keycloak: Clients, panel, Capability config, Direct access grants).
 
 Уже имеют рабочие значения по умолчанию: `COMPOSE_PROFILES=backend` (включает `db`, `backend`, `face`, `face-console`, `ollama`), `KC_INTERNAL_URL=http://keycloak:8080`, `FACE_URL=http://face:8000`, `FACE_TIMEOUT_S=10`, `PASS_SESSION_TTL_S=90` (жизнь сессии и кода прохода), `ENROLL_CODE_TTL_MIN=60`, `SITE_TZ=Europe/Moscow`. Остальное (`PASS_CODE_MAX_ATTEMPTS`, `PASS_CODE_REQUEST_MAX_SKEW_S`, `AUTH_REDIRECT_URIS`, `FACE_CAMERA_ID` и др.) с описанием — в [backend/README.md](../backend/README.md).
 

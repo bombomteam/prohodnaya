@@ -1,9 +1,16 @@
 """Схемы входа операторов (PRD §8.11). Имена полей camelCase — как ждёт фронт."""
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
 class AuthConfigOut(BaseModel):
     authorizationEndpoint: str
+    demoLogin: bool = False
+
+
+class DemoIn(BaseModel):
+    role: Literal["admin", "manager", "controller"]
 
 
 class ExchangeIn(BaseModel):

@@ -72,7 +72,9 @@ def form(request: httpx.Request) -> dict:
 def test_config():
     r = client.get("/api/auth/config")
     assert r.status_code == 200
-    assert r.json() == {"authorizationEndpoint": f"{KC_PUBLIC}/realms/construction/protocol/openid-connect/auth"}
+    assert r.json() == {
+        "authorizationEndpoint": f"{KC_PUBLIC}/realms/construction/protocol/openid-connect/auth", "demoLogin": False,
+    }
 
 
 def test_config_without_public_url_is_503(monkeypatch):
@@ -212,3 +214,73 @@ def test_logs_contain_no_secrets(mock_kc, caplog):
     text = caplog.text
     assert "keycloak" in text  # логи вообще писались
     assert not any(s in text for s in SECRETS) and "eyJ" not in text
+
+
+DEMO_PASSWORD = "DEMO-PASS-SECRET"
+
+
+@pytest.fixture
+def demo_on(monkeypatch):
+    """Демо-вход включён; пароли заданы, логины по умолчанию."""
+    monkeypatch.setattr(service, "settings", dataclasses.replace(
+        service.settings, demo_login=True,
+        demo_users={"admin": "admin1", "manager": "manager1", "controller": "controller1"},
+        demo_passwords={"admin": DEMO_PASSWORD, "manager": DEMO_PASSWORD, "controller": DEMO_PASSWORD}))
+
+
+def test_config_demo_login_flag(demo_on):
+    assert client.get("/api/auth/config").json()["demoLogin"] is True
+
+
+@pytest.mark.parametrize("role", ["admin", "manager", "controller"])
+def test_demo_success(demo_on, mock_kc, role):
+    token = make_token(roles=(role, "offline_access"), preferred_username=f"{role}1")
+    seen = mock_kc(lambda r: kc_ok(access=token))
+    r = client.post("/api/auth/demo", json={"role": role})
+    assert r.status_code == 200 and r.headers["cache-control"] == "no-store"
+    body = r.json()
+    assert set(body) == {"accessToken", "refreshToken", "expiresIn", "user"}
+    assert body["user"] == {"sub": "u-1", "preferred_username": f"{role}1", "roles": [role]}
+    req = seen[0]
+    assert str(req.url) == "http://keycloak:8080/realms/construction/protocol/openid-connect/token"
+    assert form(req) == {
+        "grant_type": "password", "client_id": "panel", "scope": "openid",
+        "username": f"{role}1", "password": DEMO_PASSWORD,
+    }
+
+
+def test_demo_disabled_is_404_and_does_not_call_keycloak(mock_kc):
+    seen = mock_kc(lambda r: kc_ok())
+    r = client.post("/api/auth/demo", json={"role": "admin"})
+    assert r.status_code == 404
+    assert r.json() == {"code": "DEMO_LOGIN_DISABLED", "message": "Демо-вход выключен"}
+    assert seen == []
+
+
+def test_demo_unknown_role_is_422(demo_on, mock_kc):
+    seen = mock_kc(lambda r: kc_ok())
+    assert client.post("/api/auth/demo", json={"role": "root"}).status_code == 422
+    assert seen == []
+
+
+def _refuse(r):
+    raise httpx.ConnectError("down")
+
+
+@pytest.mark.parametrize("handler", [
+    lambda r: httpx.Response(401, json={"error": "invalid_grant"}),
+    lambda r: httpx.Response(500),
+    _refuse,
+])
+def test_demo_keycloak_failure_is_502(demo_on, mock_kc, caplog, handler):
+    mock_kc(handler)
+    with caplog.at_level(logging.DEBUG):
+        r = client.post("/api/auth/demo", json={"role": "controller"})
+    assert r.status_code == 502 and r.json()["code"] == "AUTH_PROVIDER_ERROR"
+    assert DEMO_PASSWORD not in caplog.text and DEMO_PASSWORD not in r.text
+
+
+def test_demo_role_missing_in_token_is_502(demo_on, mock_kc):
+    mock_kc(lambda r: kc_ok(access=make_token(roles=("controller",))))
+    r = client.post("/api/auth/demo", json={"role": "admin"})
+    assert r.status_code == 502 and r.json()["code"] == "AUTH_PROVIDER_ERROR"

@@ -26,6 +26,9 @@ class Settings:
     kc_public_url: str
     kc_internal_url: str
     auth_redirect_uris: list[str]
+    demo_login: bool
+    demo_users: dict[str, str]
+    demo_passwords: dict[str, str]
     llm_provider: str
     llm_external_url: str
     llm_external_model: str
@@ -61,6 +64,9 @@ def load_settings() -> Settings:
         kc_public_url=env("KC_PUBLIC_URL", ""),
         kc_internal_url=env("KC_INTERNAL_URL", ""),
         auth_redirect_uris=redirect_uris,
+        demo_login=(env("DEMO_LOGIN") or "false").lower() == "true",
+        demo_users={r: env(f"DEMO_{r.upper()}_USER") or f"{r}1" for r in ("admin", "manager", "controller")},
+        demo_passwords={r: env(f"DEMO_{r.upper()}_PASSWORD") or "" for r in ("admin", "manager", "controller")},
         llm_provider=(env("LLM_PROVIDER") or "ollama").lower(),
         llm_external_url=env("LLM_EXTERNAL_URL") or "",
         llm_external_model=env("LLM_EXTERNAL_MODEL") or "",
