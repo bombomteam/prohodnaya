@@ -1,9 +1,11 @@
 """Помощник: поставщик фактов для app.llm и безопасный вызов модели (PRD 8.10)."""
 import logging
 
+import httpx
 from sqlalchemy.orm import Session
 
-from app.llm import AssistantAnswer
+from app.llm import AssistantAnswer, client
+from app.schemas.assistant import AssistantStatus
 
 log = logging.getLogger(__name__)
 
@@ -64,4 +66,39 @@ class FactsProvider:
 
 def unavailable() -> AssistantAnswer:
     """Ответ на любой сбой модели: без деталей для пользователя."""
-    return AssistantAnswer(status="unavailable", text=UNAVAILABLE_TEXT, facts_used={})
+    return AssistantAnswer(status="unavailable", text=UNAVAILABLE_TEXT, facts_used={},
+                           provider=client.provider(), model=client.model_name())
+
+
+async def _ollama_has_model(model: str) -> bool:
+    """Быстрая проверка (таймаут 2 с): ollama отвечает на /api/tags и модель есть в списке."""
+    try:
+        async with httpx.AsyncClient(transport=client._transport, timeout=2.0) as http:
+            r = await http.get(f"{client.settings.ollama_url}/api/tags")
+        r.raise_for_status()
+        names = {m.get("name") or m.get("model") for m in r.json().get("models", [])}
+    except Exception:
+        return False
+    return model in names or (":" not in model and f"{model}:latest" in names)
+
+
+async def get_status() -> AssistantStatus:
+    """Состояние помощника: провайдер, модель, настроен ли и доступен ли.
+
+    ollama: configured = задан OLLAMA_URL, available = ollama отвечает и модель загружена.
+    external: configured = заданы URL, модель и ключ; available = configured (платный API не дёргаем).
+    """
+    name = client.provider()
+    model = client.model_name(name)
+    if name == "external":
+        configured = bool(client.settings.llm_external_url and model and client.settings.llm_api_key)
+        return AssistantStatus(provider=name, model=model, configured=configured, available=configured)
+    configured = bool(client.settings.ollama_url)
+    available = configured and await _ollama_has_model(model)
+    return AssistantStatus(provider="ollama", model=model, configured=configured, available=available)
+
+
+async def set_provider(name: str) -> AssistantStatus:
+    """Переключает провайдер в памяти процесса (воркер один); после перезапуска действует LLM_PROVIDER из env."""
+    client.set_provider(name)
+    return await get_status()

@@ -1,9 +1,10 @@
 from fastapi import APIRouter
 
 from app import llm
-from app.dependency import DbDep, ManagerDep
+from app.dependency import AdminOrManagerDep, DbDep, ManagerDep
 from app.llm import AssistantAnswer
-from app.schemas.assistant import AskIn, SummaryIn
+from app.schemas.assistant import AskIn, AssistantStatus, ProviderIn, SummaryIn
+from app.services import assistant as service
 from app.services.assistant import FactsProvider, log, unavailable
 
 router = APIRouter(tags=["assistant"])
@@ -27,3 +28,15 @@ async def summary(body: SummaryIn, user: ManagerDep, db: DbDep):
     except Exception:
         log.exception("Сбой помощника (summary)")
         return unavailable()
+
+
+@router.get("/assistant/status", response_model=AssistantStatus)
+async def status(user: AdminOrManagerDep):
+    """Провайдер, модель, настроен ли и доступен ли помощник (ключ API не возвращается)."""
+    return await service.get_status()
+
+
+@router.put("/assistant/provider", response_model=AssistantStatus)
+async def set_provider(body: ProviderIn, user: AdminOrManagerDep):
+    """Переключает провайдер помощника в памяти процесса; после перезапуска действует LLM_PROVIDER из env."""
+    return await service.set_provider(body.provider)

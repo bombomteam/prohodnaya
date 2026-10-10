@@ -1,5 +1,6 @@
 """Запросы помощника. Ответ — app.llm.AssistantAnswer (контракт владельца модуля llm)."""
 from datetime import date
+from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -18,3 +19,15 @@ class SummaryIn(BaseModel):
         if self.date_from > self.date_to:
             raise ValueError("date_from")
         return self
+
+
+class ProviderIn(BaseModel):
+    provider: Literal["ollama", "external"]
+
+
+class AssistantStatus(BaseModel):
+    """Состояние помощника для экрана; ключ API сюда никогда не попадает."""
+    provider: Literal["ollama", "external"]
+    model: str
+    configured: bool
+    available: bool

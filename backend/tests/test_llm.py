@@ -41,6 +41,11 @@ def _transport(handler):
     return httpx.MockTransport(handler)
 
 
+@pytest.fixture(autouse=True)
+def _no_switch(monkeypatch):
+    monkeypatch.setattr(client, "_provider_override", None)
+
+
 @pytest.fixture
 def requests_seen():
     return []
@@ -136,3 +141,161 @@ async def test_unknown_question(monkeypatch, requests_seen):
     monkeypatch.setattr(client, "_transport", _answering("x", requests_seen))
     a = await llm.ask("Расскажи анекдот", Facts())
     assert a.status == "no_data" and requests_seen == []
+
+
+async def test_realistic_answer_with_dates_times_percents_not_rejected(monkeypatch, requests_seen):
+    """Даты, время, номера пунктов, проценты и числа в другом формате не дают ложного bad_response."""
+    text = (
+        "Сводка на 10.10.2026:\n"
+        "1. Смен: 8, людей: 7.\n"
+        "2. Отработано 41,5 часа (41.50 ч).\n"
+        "3. Отказов 2 (FACE_NO_FACE), это 100% отказов."
+    )
+    facts = Facts(summary={**SUMMARY, "worked_hours": 41.5, "denials_share": 1.0})
+    people = [{**PEOPLE[0]}]
+    monkeypatch.setattr(client, "_transport", _answering(text, requests_seen))
+    a = await llm.summary(date(2026, 10, 10), date(2026, 10, 10), facts)
+    assert a.status == "ok", a.text
+    monkeypatch.setattr(client, "_transport", _answering("Иванов Иван на объекте с 8:30, 10.10.2026.", requests_seen))
+    b = await llm.ask("Кто сейчас на объекте?", Facts(people=people))
+    assert b.status == "ok", b.text
+
+
+async def test_percent_computed_by_model_still_rejected(monkeypatch, requests_seen):
+    monkeypatch.setattr(client, "_transport", _answering("Отказов 2, это 37% от всех.", requests_seen))
+    a = await llm.summary(date(2026, 10, 10), date(2026, 10, 10), Facts())
+    assert a.status == "bad_response"
+
+
+async def test_any_httpx_or_parse_failure_is_unavailable(monkeypatch):
+    for exc in (httpx.ReadTimeout("долго"), httpx.InvalidURL("битый url"), httpx.UnsupportedProtocol("схема"),
+                RuntimeError("что угодно")):
+        def boom(request, exc=exc):
+            raise exc
+
+        monkeypatch.setattr(client, "_transport", _transport(boom))
+        a = await llm.ask("кто на объекте", Facts())
+        assert a.status == "unavailable" and "Иванов Иван" in a.text
+    for payload in ([], {"choices": None}, {"choices": [{"message": "строка"}]}, {"choices": [{"message": {"content": None}}]}):
+        monkeypatch.setattr(client, "_transport", _transport(lambda request, p=payload: httpx.Response(200, json=p)))
+        assert (await llm.ask("кто на объекте", Facts())).status == "unavailable"
+
+
+async def test_timeout_comes_from_settings(monkeypatch):
+    seen = {}
+
+    def handler(request):
+        seen.update(request.extensions["timeout"])
+        return httpx.Response(200, json={"choices": [{"message": {"content": "На объекте 1 человек."}}]})
+
+    _use(monkeypatch, llm_timeout_s=123.0)
+    monkeypatch.setattr(client, "_transport", _transport(handler))
+    await llm.ask("кто на объекте", Facts())
+    assert seen["read"] == 123.0 and seen["connect"] == 123.0
+
+
+async def test_answer_carries_provider_and_model(monkeypatch, requests_seen):
+    _use(monkeypatch, llm_provider="ollama", ollama_model="qwen2.5:1.5b")
+    monkeypatch.setattr(client, "_transport", _answering("На объекте 1 человек.", requests_seen))
+    a = await llm.ask("кто на объекте", Facts())
+    assert (a.provider, a.model) == ("ollama", "qwen2.5:1.5b")
+    client.set_provider("external")
+    _use(monkeypatch, llm_external_url="", llm_external_model="big-model")
+    a = await llm.ask("кто на объекте", Facts())  # external не настроен -> unavailable, но провайдер указан
+    assert a.status == "unavailable" and (a.provider, a.model) == ("external", "big-model")
+    a = await llm.ask("анекдот", Facts())
+    assert a.status == "no_data" and a.provider == "external"
+
+
+# ---- новые интенты (кейс 4.2) ----
+
+class MoreFacts(Facts):
+    def __init__(self, less=(), zones=(), denials=()):
+        super().__init__()
+        self.less, self.zone_rows, self.denial_rows = list(less), list(zones), list(denials)
+        self.calls = []
+
+    def worked_less_than(self, day, hours):
+        self.calls.append(("less", day, hours))
+        return self.less
+
+    def zone_minutes(self, date_from, date_to, *a):
+        self.calls.append(("zones", date_from, date_to))
+        return self.zone_rows
+
+    def denials(self, date_from, date_to):
+        self.calls.append(("denials", date_from, date_to))
+        return self.denial_rows
+
+
+async def test_intent_worked_less_than(monkeypatch, requests_seen):
+    monkeypatch.setattr(llm, "_today", lambda: date(2026, 10, 10))
+    facts = MoreFacts(less=[{"person_id": 1, "fio": "Петров Пётр", "worked_minutes": 390.0}])
+    monkeypatch.setattr(client, "_transport", _answering("Вчера, 09.10.2026, меньше 6 часов отработал Петров Пётр: 6 ч 30 мин.", requests_seen))
+    a = await llm.ask("Кто вчера отработал меньше 6 часов?", facts)
+    assert facts.calls == [("less", date(2026, 10, 9), 6)]
+    assert a.status == "ok"
+    assert a.facts_used["limit_hours"] == 6 and a.facts_used["people"][0]["worked"] == "6 ч 30 мин"
+    body = json.loads(requests_seen[0].content)["messages"][1]["content"]
+    assert "Петров Пётр" in body and "6 ч 30 мин" in body
+
+
+async def test_worked_less_than_default_8_and_no_data(monkeypatch, requests_seen):
+    monkeypatch.setattr(llm, "_today", lambda: date(2026, 10, 10))
+    monkeypatch.setattr(client, "_transport", _answering("x", requests_seen))
+    facts = MoreFacts()
+    a = await llm.ask("Кто вчера недоработал?", facts)  # числа нет -> 8
+    assert facts.calls[-1] == ("less", date(2026, 10, 9), 8)
+    assert a.status == "no_data" and "Данных нет" in a.text and requests_seen == []
+
+
+async def test_intent_zones(monkeypatch, requests_seen):
+    monkeypatch.setattr(llm, "_today", lambda: date(2026, 10, 10))
+    rows = [{"zone_id": 1, "name": "Котлован", "minutes": 300.0, "people_count": 2},
+            {"zone_id": 2, "name": "Склад", "minutes": 90.0, "people_count": 3},
+            {"zone_id": 3, "name": "Пустая", "minutes": 0.0, "people_count": 0},
+            {"zone_id": None, "name": "Вне зон", "minutes": 999.0, "people_count": 5}]
+    facts = MoreFacts(zones=rows)
+    monkeypatch.setattr(client, "_transport", _answering("Больше всего времени — Котлован (5 ч 0 мин), людей — Склад (3).", requests_seen))
+    a = await llm.ask("В какой зоне больше всего людей?", facts)
+    assert facts.calls == [("zones", date(2026, 10, 10), date(2026, 10, 10))]
+    assert a.status == "ok"
+    assert a.facts_used["top_by_time"] == "Котлован" and a.facts_used["top_by_people"] == "Склад"
+    assert [z["name"] for z in a.facts_used["zones"]] == ["Котлован", "Склад"]
+
+
+async def test_zones_no_data(monkeypatch, requests_seen):
+    monkeypatch.setattr(client, "_transport", _answering("x", requests_seen))
+    a = await llm.ask("В какой зоне больше всего времени?",
+                      MoreFacts(zones=[{"zone_id": 1, "name": "Котлован", "minutes": 0.0, "people_count": 0}]))
+    assert a.status == "no_data" and requests_seen == []
+
+
+async def test_intent_denials_week(monkeypatch, requests_seen):
+    monkeypatch.setattr(llm, "_today", lambda: date(2026, 10, 10))
+    rows = [{"id": i, "ts": "2026-10-09T10:00:00+03:00", "person_id": 1, "fio": "Иванов Иван", "direction": "in",
+             "reason_code": code, "reason": text}
+            for i, (code, text) in enumerate([("FACE_NO_FACE", "Лицо не найдено")] * 2 + [("CODE_WRONG", "Неверный код")])]
+    facts = MoreFacts(denials=rows)
+    monkeypatch.setattr(client, "_transport", _answering("За неделю 3 отказа: Лицо не найдено — 2, Неверный код — 1.", requests_seen))
+    a = await llm.ask("Покажи отказы за неделю и причины", facts)
+    assert facts.calls == [("denials", date(2026, 10, 4), date(2026, 10, 10))]
+    assert a.status == "ok" and a.facts_used["total"] == 3
+    assert a.facts_used["by_reason"][0] == {"reason_code": "FACE_NO_FACE", "reason": "Лицо не найдено", "count": 2}
+
+
+async def test_denials_no_data_and_unavailable_fallback(monkeypatch, requests_seen):
+    monkeypatch.setattr(client, "_transport", _answering("x", requests_seen))
+    a = await llm.ask("отказы за неделю", MoreFacts())
+    assert a.status == "no_data" and requests_seen == []
+    rows = [{"id": 1, "ts": "2026-10-09T10:00:00+03:00", "person_id": 1, "fio": "Иванов Иван", "direction": "in",
+             "reason_code": "CODE_WRONG", "reason": "Неверный код"}]
+    monkeypatch.setattr(client, "_transport", _transport(lambda r: httpx.Response(503)))
+    a = await llm.ask("отказы за неделю", MoreFacts(denials=rows))
+    assert a.status == "unavailable" and "CODE_WRONG" in a.text and "1" in a.text
+
+
+async def test_old_intents_still_routed(monkeypatch, requests_seen):
+    monkeypatch.setattr(client, "_transport", _answering("На объекте 1 человек.", requests_seen))
+    assert (await llm.ask("Кто сейчас на объекте?", MoreFacts())).facts_used["count"] == 1
+    assert "summary" in (await llm.ask("Сводка за день", MoreFacts())).facts_used

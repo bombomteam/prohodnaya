@@ -87,6 +87,12 @@ docker compose exec -T backend python -m pytest -q -p no:cacheprovider tests
 обменивает код на токены через `POST /api/auth/exchange`, обновляет `POST /api/auth/refresh`, выходит через
 `POST /api/auth/logout`. Рабочие в Keycloak не заводятся: у них одноразовый enroll-код (`POST /api/enroll`) и ключ на телефоне.
 
+**Помощник.** `POST /api/assistant/ask` и `/summary` отвечают `{status, text, facts_used, provider, model}`. Вопросы: кто на объекте,
+сводка за день, кто вчера отработал меньше N часов (по умолчанию 8), в какой зоне больше всего людей/времени, отказы за неделю и причины.
+`GET /api/assistant/status` (admin, manager) даёт `{provider, model, configured, available}`; `PUT /api/assistant/provider`
+(`{"provider":"ollama"|"external"}`) переключает провайдер в памяти процесса (uvicorn запускается с одним воркером), после
+перезапуска действует `LLM_PROVIDER` из env. Ключ API в ответах не возвращается.
+
 **Геоточки.** Телефон шлёт пачки `POST /api/locations` раз в `LOCATION_INTERVAL_S`; точки старше
 `LOCATION_MAX_AGE_S` отклоняются. План и калибровка — `PUT /api/site/plan`, `PUT /api/site/calibration`.
 
