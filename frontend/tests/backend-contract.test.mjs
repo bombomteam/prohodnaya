@@ -1,9 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { backendApi, mapPerson, mapEvent, appearancesFromRoutes } from "../src/api.js";
-import { session } from "../src/auth.js";
+import { ApiError, backendApi, mapPerson, mapEvent, appearancesFromRoutes } from "../src/api.js";
+import { CASE_ZONES, caseZoneMetrics } from "../src/zones.js";
+import { session, initAuth, logout } from "../src/auth.js";
+import { config } from "../config.js";
 
-test("backend adapter sends person multipart, passage direction and three frames", async () => {
+test("backend adapter sends person multipart and passage direction", async () => {
   const previousFetch = globalThis.fetch, previousLocation = globalThis.location;
   globalThis.location = new URL("http://localhost:8080/?devRole=admin");
   session.dev = true;
@@ -33,15 +35,92 @@ test("backend adapter sends person multipart, passage direction and three frames
     const challenge = await backendApi.createChallenge("entry");
     assert.deepEqual(JSON.parse(calls[2].body), { direction: "in" });
     assert.match(challenge.code, /"sid"/);
-    const frames = Array.from({ length: 3 }, () => new Blob(["jpg"], { type: "image/jpeg" }));
-    const decision = await backendApi.decidePass(challenge.id, "entry", frames);
-    assert.equal(calls[3].body.getAll("frames").length, 3);
-    assert.equal(decision.outcome, "allowed");
-    assert.equal(calls[3].headers.Authorization, undefined);
   } finally {
     globalThis.fetch = previousFetch;
     globalThis.location = previousLocation;
     session.dev = false;
+  }
+});
+
+test("face upload accepts 1–10 frames, sends controller token and preserves 401/403 failures", async () => {
+  const previous = { fetch: globalThis.fetch, location: globalThis.location, history: globalThis.history,
+    sessionStorage: globalThis.sessionStorage, mode: config.mode, session: { ...session } };
+  const state = "test-login-state";
+  globalThis.location = new URL(`http://localhost:8080/?code=test-code&state=${state}`);
+  globalThis.history = { replaceState() {} };
+  globalThis.sessionStorage = {
+    getItem: () => JSON.stringify({ state, verifier: "test-verifier", createdAt: Date.now(), redirectUri: "http://localhost:8080/" }),
+    removeItem() {},
+  };
+  config.mode = "api";
+  session.dev = false;
+  const uploads = [];
+  let status = 200;
+  globalThis.fetch = async (url, options) => {
+    if (url.endsWith("/auth/exchange")) return Response.json({ accessToken: "test-controller-token", expiresIn: 300,
+      user: { preferred_username: "Контролёр", roles: ["controller"] } });
+    uploads.push({ url, ...options });
+    return Response.json(status === 200 ? { decision: "allow", person: { fio: "Иванов Иван" } } : { code: `HTTP_${status}`, message: "Ошибка авторизации" }, { status });
+  };
+  const frame = new Blob(["jpg"], { type: "image/jpeg" });
+  try {
+    await initAuth();
+    assert.deepEqual(session.roles, ["controller"]);
+    for (const count of [1, 3, 10]) {
+      const result = await backendApi.decidePass("session-id", "entry", Array(count).fill(frame));
+      const upload = uploads.at(-1);
+      assert.equal(result.outcome, "allowed");
+      assert.ok(upload.url.endsWith("/passages/session-id/face"));
+      assert.equal(upload.method, "POST");
+      assert.equal(upload.body.getAll("frames").length, count);
+      assert.equal(upload.headers.Authorization, "Bearer test-controller-token");
+      assert.equal(upload.headers["Content-Type"], undefined); // fetch supplies the multipart boundary.
+    }
+    for (const invalid of [[], Array(11).fill(frame), [new Blob([])], ["not a frame"], frame]) {
+      await assert.rejects(backendApi.decidePass("session-id", "entry", invalid), /от 1 до 10/);
+    }
+    assert.equal(uploads.length, 3);
+    for (const [code, message] of [[401, "Сессия истекла, войдите заново"], [403, "Недостаточно прав"]]) {
+      status = code;
+      await assert.rejects(backendApi.decidePass("session-id", "entry", [frame]), error =>
+        error instanceof ApiError && error.status === code && error.message === message);
+    }
+    await logout();
+    const before = uploads.length;
+    await assert.rejects(backendApi.decidePass("session-id", "entry", [frame]), /Сессия истекла/);
+    assert.equal(uploads.length, before);
+  } finally {
+    await logout();
+    config.mode = previous.mode;
+    Object.assign(session, previous.session);
+    for (const key of ["fetch", "location", "history", "sessionStorage"]) globalThis[key] = previous[key];
+  }
+});
+
+test("photo rejection keeps FACE code and human message on create and update", async () => {
+  const previous = { fetch: globalThis.fetch, location: globalThis.location, session: { ...session } };
+  globalThis.location = new URL("http://localhost:8080/?devRole=admin");
+  session.dev = true;
+  const failures = [
+    { status: 422, code: "FACE_NO_FACE", message: "Лицо не найдено. Выберите другое фото." },
+    { status: 422, code: "FACE_MULTIPLE_FACES", message: "На фото несколько лиц." },
+    { status: 503, code: "FACE_SERVICE_UNAVAILABLE", message: "Сервис распознавания недоступен, попробуйте позже" },
+  ];
+  try {
+    const form = new FormData();
+    form.set("name", "Иванов Иван");
+    form.set("referencePhoto", new Blob(["jpg"], { type: "image/jpeg" }), "face.jpg");
+    for (const failure of failures) {
+      globalThis.fetch = async () => Response.json({ code: failure.code, message: failure.message }, { status: failure.status });
+      for (const id of [null, "1"]) {
+        await assert.rejects(backendApi.saveEmployee(id, form), error => error instanceof ApiError &&
+          error.status === failure.status && error.code === failure.code && error.message === failure.message);
+      }
+    }
+  } finally {
+    globalThis.fetch = previous.fetch;
+    globalThis.location = previous.location;
+    Object.assign(session, previous.session);
   }
 });
 
@@ -55,8 +134,10 @@ test("sightings list uses route timestamps, worker names and configured zone nam
     { employeeId: "1", employeeName: "Иванов Иван", points: [{ at: "2026-10-10T07:00:00Z", zoneId: 2 }] },
     { employeeId: "2", employeeName: "Петров Пётр", points: [{ at: "2026-10-10T08:00:00Z", zoneId: null }] },
   ];
-  const entries = appearancesFromRoutes(routes, [{ id: "2", name: "Склад" }]);
+  const entries = appearancesFromRoutes(routes, [{ id: "2", name: "Место для курения" }]);
   assert.deepEqual(entries.map(({ employeeName, zoneName }) => [employeeName, zoneName]),
-    [["Петров Пётр", "Вне размеченных зон"], ["Иванов Иван", "Склад"]]);
+    [["Петров Пётр", "Вне трёх заданных зон"], ["Иванов Иван", "Курилка"]]);
   assert.equal(entries[1].at, "2026-10-10T07:00:00Z");
+  assert.deepEqual(caseZoneMetrics([{ id: "9", name: "Склад", count: 120 }, { id: "2", name: "Место для курения", count: 4 }]).map(zone => zone.name), CASE_ZONES);
+  assert.equal(caseZoneMetrics([{ id: "9", name: "Склад", count: 120 }])[0].available, false);
 });

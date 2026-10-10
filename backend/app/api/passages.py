@@ -51,9 +51,9 @@ def get_passage(session_id: UUID, user: ControllerDep):
 def check_face(
     session_id: UUID,
     user: ControllerDep,
-    frames: Annotated[list[UploadFile], File(min_length=3, max_length=3)],
+    frames: Annotated[list[UploadFile], File(min_length=1, max_length=10)],
 ):
-    """Три кадра лица (multipart, поле frames); сервер сам решает allow/deny."""
+    """1–10 кадров лица (multipart, поле frames); сервер сам решает allow/deny."""
     # STUB
     now = datetime.now(timezone.utc)
     return FaceResultOut(

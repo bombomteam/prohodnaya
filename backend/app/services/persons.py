@@ -50,31 +50,45 @@ def _check_group(db: Session, group_id: int | None) -> None:
         raise ApiError("GROUP_NOT_FOUND", "Группа не найдена", 422)
 
 
-def _embedding_from_photo(photo: bytes) -> list[float]:
-    """Проверяет эталонное фото через face.analyze и возвращает эмбеддинг.
+_IMAGE_TYPES = {"jpg": "image/jpeg", "png": "image/png", "webp": "image/webp"}
+_UNAVAILABLE = ("FACE_SERVICE_UNAVAILABLE", "Сервис распознавания недоступен, попробуйте позже", 503)
 
-    Вызывается ДО любых изменений в БД: 0 лиц, несколько лиц или плохое качество — 422,
-    недоступность модели — 503. Запись при отказе не создаётся.
+
+def _image_ext(photo: bytes) -> str:
+    """Тип фото по сигнатуре файла (content_type от клиента не доверяем): jpg, png или webp."""
+    if photo.startswith(b"\xff\xd8\xff"):
+        return "jpg"
+    if photo.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if photo[:4] == b"RIFF" and photo[8:12] == b"WEBP":
+        return "webp"
+    raise ApiError("FACE_UNSUPPORTED_FORMAT", "Формат не поддерживается. Нужен JPEG, PNG или WEBP.", 422)
+
+
+def _check_photo(photo: bytes) -> tuple[face.ReferenceCheck, str]:
+    """Проверяет эталонное фото через face.check_reference; возвращает ответ модуля и расширение файла.
+
+    Вызывается ДО любых изменений в БД: отказ модуля — 422 с кодом FACE_<REASON> и текстом модуля,
+    недоступность модуля или ответ без эмбеддинга — 503. Запись при отказе не создаётся.
     """
+    ext = _image_ext(photo)
     try:
-        result = face.analyze(photo)
+        check = face.check_reference(photo, f"reference.{ext}", _IMAGE_TYPES[ext])
+    except face.FaceRejected as e:
+        raise ApiError("FACE_" + e.reason.code.upper(), e.reason.text, 422)
     except face.FaceUnavailable:
         log.error("Сервис распознавания недоступен при проверке эталонного фото")
-        raise ApiError("FACE_SERVICE_UNAVAILABLE", "Сервис распознавания недоступен, попробуйте позже", 503)
-    if result.faces_count == 0:
-        raise ApiError("FACE_NOT_FOUND", "На фото не найдено лицо", 422)
-    if result.faces_count > 1:
-        raise ApiError("FACE_MULTIPLE", "На фото несколько человек, нужен один", 422)
-    if result.quality_issue:
-        raise ApiError("FACE_LOW_QUALITY", "Лицо слишком мелкое или размыто, переснимите", 422)
-    if result.embedding is None:  # контракт face нарушен: одно лицо без эмбеддинга
-        log.error("face.analyze вернул одно лицо без эмбеддинга")
-        raise ApiError("FACE_SERVICE_UNAVAILABLE", "Сервис распознавания недоступен, попробуйте позже", 503)
-    return result.embedding
+        raise ApiError(*_UNAVAILABLE)
+    if not check.accepted:
+        raise ApiError("FACE_" + check.reason.code.upper(), check.reason.text, 422)
+    if check.embedding is None or check.reference_hash is None:  # контракт нарушен: принято, но без эталона
+        log.error("face.check_reference принял фото без embedding/reference_hash")
+        raise ApiError(*_UNAVAILABLE)
+    return check, ext
 
 
-def _photo_path(person_id: int) -> Path:
-    return Path(settings.data_dir) / "photos" / f"{person_id}.jpg"
+def _photo_path(person_id: int, ext: str) -> Path:
+    return Path(settings.data_dir) / "photos" / f"{person_id}.{ext}"
 
 
 def _drop(tmp: Path | None) -> None:
@@ -83,16 +97,17 @@ def _drop(tmp: Path | None) -> None:
             tmp.unlink(missing_ok=True)
 
 
-def _commit(db: Session, person_id: int, photo: bytes | None) -> None:
+def _commit(db: Session, person_id: int, photo: bytes | None, ext: str, old_path: str | None = None) -> None:
     """Коммитит транзакцию вместе с файлом фото.
 
     Сначала фото пишется во временный файл (упало — откат, в БД ничего), затем commit,
-    затем атомарная подмена `<id>.jpg`: старое фото не теряется, если commit не прошёл.
+    затем атомарная подмена `<id>.<ext>`: старое фото не теряется, если commit не прошёл.
+    Если расширение сменилось (jpg → png), старый файл удаляется после успешной подмены.
     """
     if photo is None:
         db.commit()
         return
-    path = _photo_path(person_id)
+    path = _photo_path(person_id, ext)
     tmp: Path | None = None
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -116,16 +131,18 @@ def _commit(db: Session, person_id: int, photo: bytes | None) -> None:
         log.exception("Не удалось подменить фото person_id=%s после commit", person_id)
         _drop(tmp)
         raise ApiError("PHOTO_SAVE_FAILED", "Не удалось сохранить фото, попробуйте ещё раз", 500)
+    if old_path and Path(old_path) != path:
+        _drop(Path(old_path))
 
 
 def create_person(db: Session, actor_sub: str, fio: str, position: str | None, group_id: int | None, photo: bytes) -> PersonOut:
     """Заводит человека: проверка фото → persons + face_templates + аудит в одной транзакции → файл фото."""
-    embedding = _embedding_from_photo(photo)
+    check, ext = _check_photo(photo)
     _check_group(db, group_id)
     person = repo.add(db, fio, position or None, group_id)
-    repo.set_template(db, person.id, embedding, str(_photo_path(person.id)))
+    repo.set_template(db, person.id, check.embedding, check.model_version, check.reference_hash, str(_photo_path(person.id, ext)))
     audit.write(db, actor_sub, "person.create", {"person_id": person.id, "fio": fio, "group_id": group_id})
-    _commit(db, person.id, photo)
+    _commit(db, person.id, photo, ext)
     log.info("Заведён человек id=%s", person.id)
     return get_person(db, person.id)
 
@@ -141,7 +158,7 @@ def update_person(
     person = repo.get(db, person_id)
     if person is None:
         raise _not_found()
-    embedding = _embedding_from_photo(photo) if photo is not None else None
+    check, ext = _check_photo(photo) if photo is not None else (None, "")
     new: dict[str, object] = {}
     if fio is not None:
         new["fio"] = fio
@@ -155,21 +172,24 @@ def update_person(
     changed = [k for k, v in new.items() if getattr(person, k) != v]
     for k in changed:
         setattr(person, k, new[k])
-    if embedding is not None:
-        repo.set_template(db, person_id, embedding, str(_photo_path(person_id)))
+    old_template = repo.get_template(db, person_id)
+    old_path = old_template.photo_path if old_template else None
+    if check is not None:
+        repo.set_template(db, person_id, check.embedding, check.model_version, check.reference_hash, str(_photo_path(person_id, ext)))
         changed.append("photo")
     if changed:  # без реальных изменений аудит не пишем
         audit.write(db, actor_sub, "person.update", {"person_id": person_id, "fields": changed})
-    _commit(db, person_id, photo)
+    _commit(db, person_id, photo, ext, old_path)
     log.info("Изменён человек id=%s поля=%s", person_id, ",".join(changed))
     return get_person(db, person_id)
 
 
-def photo_file(db: Session, person_id: int) -> Path:
-    """Путь к эталонному фото; 404, если человека, эталона или файла нет."""
+def photo_file(db: Session, person_id: int) -> tuple[Path, str]:
+    """Путь и media_type эталонного фото; 404, если человека, эталона или файла нет."""
     if repo.get(db, person_id) is None:
         raise _not_found()
     template = repo.get_template(db, person_id)
     if template is None or not Path(template.photo_path).is_file():
         raise ApiError("PHOTO_NOT_FOUND", "Фото не найдено", 404)
-    return Path(template.photo_path)
+    path = Path(template.photo_path)
+    return path, _IMAGE_TYPES.get(path.suffix.lstrip("."), "application/octet-stream")

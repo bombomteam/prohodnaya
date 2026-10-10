@@ -137,6 +137,41 @@ services:
       retries: 3
     networks:
       - edge
+      - face-internal
+
+  # Модуль распознавания лиц (face/, контракт face/docs/api.md). Без ports: — доступен только бэкенду
+  # по http://face:8000 во внутренней сети face-internal без выхода наружу. Веса внутри образа.
+  # Камера (MediaMTX) подключается позже: см. face/docs/compose-snippet.md; пока FACE_CAMERAS пуст —
+  # работает режим verify/frames (кадры с фронта).
+  face:
+    <<: *hardened
+    profiles: [backend]
+    image: ${FACE_IMAGE:-prohodnaya-face}:${FACE_TAG:-local}
+    build:
+      context: ./face
+    user: "10001:10001"
+    environment:
+      FACE_CAMERAS: ${FACE_CAMERAS:-}
+      FACE_MATCH_THRESHOLD: ${FACE_MATCH_THRESHOLD:-}
+      FACE_LIVENESS_THRESHOLD: ${FACE_LIVENESS_THRESHOLD:-}
+      FACE_CONSOLE: ${FACE_CONSOLE:-0}
+      FACE_THREADS: ${FACE_THREADS:-4}
+      ORT_DISABLE_TELEMETRY: "1"
+    # Единственная запись — /tmp (временный файл видео в консоли).
+    tmpfs:
+      - /tmp:size=256m,uid=10001,gid=10001,mode=0700,noexec,nosuid,nodev
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json,sys,urllib.request as u; r=u.urlopen('http://127.0.0.1:8000/v1/health', timeout=4); sys.exit(0 if json.load(r).get('models_loaded') else 1)"]
+      interval: 15s
+      timeout: 5s
+      start_period: 90s
+      retries: 3
+    cpus: 4.0
+    mem_limit: 3g
+    pids_limit: 200
+    stop_grace_period: 10s
+    networks:
+      - face-internal
 
   # Сюда добавится ollama (его ведёт другой участник).
 
@@ -147,3 +182,6 @@ volumes:
 
 networks:
   edge: {}
+  # Модуль лиц виден только бэкенду; у сети нет выхода наружу.
+  face-internal:
+    internal: true

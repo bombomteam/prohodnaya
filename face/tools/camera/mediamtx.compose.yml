@@ -1,0 +1,42 @@
+# MediaMTX (MIT) для стенда в compose.yaml (сервис camera-relay, см. face/docs/compose-snippet.md).
+# Монтируется только для чтения. Пароли здесь пустые: их подставляет compose через переменные
+# MTX_AUTHINTERNALUSERS_0_PASS (публикация) и MTX_AUTHINTERNALUSERS_1_PASS (чтение) из .env.
+# Наружу публикуется только RTMP 1935; RTSP 8554 и API 9997 — только во внутренней сети face-internal.
+logLevel: info
+
+api: yes
+apiAddress: :9997
+metrics: no
+pprof: no
+playback: no
+
+rtsp: yes
+rtspAddress: :8554
+rtspTransports: [tcp]
+rtmp: yes
+rtmpAddress: :1935
+srt: no
+hls: no
+webrtc: no
+moq: no
+
+authMethod: internal
+authInternalUsers:
+  # 0: стример проходной публикует поток (пароль — CAMERA_PUBLISH_PASS)
+  - user: cam
+    pass:
+    ips: []
+    permissions:
+      - action: publish
+        path: live/gate
+  # 1: модуль face читает поток, API — только из подсети face-internal (пароль — CAMERA_READ_PASS)
+  - user: reader
+    pass:
+    ips: ['172.30.42.0/24']
+    permissions:
+      - action: read
+        path: live/gate
+      - action: api
+
+paths:
+  live/gate: {}

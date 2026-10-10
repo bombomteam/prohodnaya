@@ -15,8 +15,9 @@ class Settings:
     site_tz: str
     pass_session_ttl_s: int
     enroll_code_ttl_min: int
-    face_match_threshold: float
-    face_min_matches: int
+    face_url: str
+    face_timeout_s: float
+    face_camera_id: str
     location_interval_s: int
     location_max_age_s: int
     auth_dev_bypass: bool
@@ -35,8 +36,9 @@ def load_settings() -> Settings:
         site_tz=env("SITE_TZ") or "Europe/Moscow",
         pass_session_ttl_s=_int("PASS_SESSION_TTL_S", 90),
         enroll_code_ttl_min=_int("ENROLL_CODE_TTL_MIN", 60),
-        face_match_threshold=float(env("FACE_MATCH_THRESHOLD") or 0.4),
-        face_min_matches=_int("FACE_MIN_MATCHES", 2),
+        face_url=(env("FACE_URL") or "http://face:8000").rstrip("/"),
+        face_timeout_s=float(env("FACE_TIMEOUT_S") or 5),
+        face_camera_id=env("FACE_CAMERA_ID") or "gate-1",
         location_interval_s=_int("LOCATION_INTERVAL_S", 30),
         location_max_age_s=_int("LOCATION_MAX_AGE_S", 180),
         auth_dev_bypass=(env("AUTH_DEV_BYPASS") or "false").lower() == "true",

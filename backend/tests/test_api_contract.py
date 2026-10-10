@@ -55,12 +55,16 @@ def test_stub_routes_ok(bypass):
     assert r.status_code == 200 and r.json()["zones"][1]["level"] == "empty"
 
 
-def test_face_requires_exactly_three_frames(bypass):
+def test_face_accepts_one_to_ten_frames(bypass):
     url = f"/api/passages/{SID}/face"
-    two = [("frames", ("a.jpg", b"x", "image/jpeg"))] * 2
-    three = [("frames", ("a.jpg", b"x", "image/jpeg"))] * 3
-    assert client.post(url, files=two).status_code == 422
-    assert client.post(url, files=three).status_code == 200
+
+    def frames(n):
+        return [("frames", ("a.jpg", b"x", "image/jpeg"))] * n
+
+    assert client.post(url).status_code == 422
+    assert client.post(url, files=frames(11)).status_code == 422
+    assert client.post(url, files=frames(1)).status_code == 200
+    assert client.post(url, files=frames(10)).status_code == 200
 
 
 def test_validation_error_format(bypass):

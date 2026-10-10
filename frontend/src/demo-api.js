@@ -1,5 +1,8 @@
 // Isolated browser-only walkthrough. Never use these outcomes as security evidence.
-const KEY = "prohodnaya-demo-v1";
+import { CASE_ZONES } from "./zones.js";
+
+// New fixture key prevents old nine-zone demo data from reappearing in saved browsers.
+const KEY = "prohodnaya-demo-v2";
 const localDate = (value) => new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Moscow", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(value));
 const localHour = (value) => Number(new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Moscow", hour: "2-digit", hourCycle: "h23" }).format(new Date(value)));
 const today = () => localDate(Date.now());
@@ -26,17 +29,16 @@ function initial() {
       { id: "s2", employeeId: "e2", startedAt: ago(98), endedAt: null },
     ],
     points: [
-      { employeeId: "e1", shiftId: "s1", at: ago(210), x: 17, y: 78 },
-      { employeeId: "e1", shiftId: "s1", at: ago(180), x: 35, y: 52 },
-      { employeeId: "e1", shiftId: "s1", at: ago(120), x: 50, y: 47 },
-      { employeeId: "e1", shiftId: "s1", at: ago(55), x: 65, y: 50 },
-      { employeeId: "e2", shiftId: "s2", at: ago(88), x: 15, y: 75 },
-      { employeeId: "e2", shiftId: "s2", at: ago(45), x: 18, y: 47 },
-      { employeeId: "e2", shiftId: "s2", at: ago(12), x: 43, y: 18 },
+      { employeeId: "e1", shiftId: "s1", at: ago(210), zoneId: "z0" },
+      { employeeId: "e1", shiftId: "s1", at: ago(180), zoneId: "z1" },
+      { employeeId: "e1", shiftId: "s1", at: ago(120), zoneId: "z2" },
+      { employeeId: "e1", shiftId: "s1", at: ago(55), zoneId: "z1" },
+      { employeeId: "e2", shiftId: "s2", at: ago(88), zoneId: "z2" },
+      { employeeId: "e2", shiftId: "s2", at: ago(45), zoneId: "z0" },
+      { employeeId: "e2", shiftId: "s2", at: ago(12), zoneId: "z1" },
     ],
     challenges: [],
-    site: { name: "Строительная площадка № 1", latMin: 55.7500, latMax: 55.7520, lonMin: 37.6150, lonMax: 37.6190,
-      zones: ["Проходная", "Бытовки", "Место для курения", "Северный сектор", "Корпус", "Бетономешалка", "Котлован", "Южный сектор", "Резерв"] },
+    site: { name: "Площадка из материалов кейса", zones: [...CASE_ZONES] },
     day,
   };
 }
@@ -133,10 +135,9 @@ export const demoApi = {
   async sendLocation(shiftId, position) {
     const state = read(); const shift = state.shifts.find(x => x.id === shiftId && !x.endedAt);
     if (!shift) fail("Смена закрыта. Координаты больше не принимаются.");
-    const { latMin, latMax, lonMin, lonMax } = state.site;
-    const x = (position.longitude - lonMin) / (lonMax - lonMin) * 100;
-    const y = (latMax - position.latitude) / (latMax - latMin) * 100;
-    state.points.push({ employeeId: shift.employeeId, shiftId, at: position.capturedAt, x, y });
+    // The case photos do not provide a geodetic calibration. Do not invent a zone from GPS.
+    state.points.push({ employeeId: shift.employeeId, shiftId, at: position.capturedAt,
+      lat: position.latitude, lon: position.longitude, zoneId: null });
     write(state); return { accepted: true };
   },
   async dashboard() {
@@ -153,13 +154,10 @@ export const demoApi = {
       return date >= filters.from && date <= filters.to && hour >= Number(filters.hourFrom) && hour <= Number(filters.hourTo)
         && (!selected.length || selected.includes(x.employeeId));
     });
-    const cols = Math.ceil(Math.sqrt(state.site.zones.length));
-    const rows = Math.ceil(state.site.zones.length / cols);
-    const zones = state.site.zones.map((name, index) => ({ id: `z${index}`, name, count: points.filter(x => x.x >= 0 && x.x <= 100 && x.y >= 0 && x.y <= 100 && Math.min(cols - 1, Math.floor(x.x / (100 / cols))) + Math.min(rows - 1, Math.floor(x.y / (100 / rows))) * cols === index).length }));
-    const routes = [...new Set(points.map(x => x.employeeId))].map(employeeId => ({ employeeId, employeeName: person(state, employeeId)?.name || "Сотрудник", points: points.filter(x => x.employeeId === employeeId).sort((a, b) => a.at.localeCompare(b.at)).map(point => ({ ...point,
-      zoneId: point.x >= 0 && point.x <= 100 && point.y >= 0 && point.y <= 100
-        ? `z${Math.min(cols - 1, Math.floor(point.x / (100 / cols))) + Math.min(rows - 1, Math.floor(point.y / (100 / rows))) * cols}` : null,
-    })) }));
+    const zones = CASE_ZONES.map((name, index) => ({ id: `z${index}`, name, count: points.filter(point => point.zoneId === `z${index}`).length }));
+    const routes = [...new Set(points.map(point => point.employeeId))].map(employeeId => ({ employeeId,
+      employeeName: person(state, employeeId)?.name || "Сотрудник",
+      points: points.filter(point => point.employeeId === employeeId).sort((a, b) => a.at.localeCompare(b.at)) }));
     return { metric: "Число полученных точек геолокации в зоне", zones, routes, totalPoints: points.length };
   },
   async shiftReport(filters) {
@@ -176,12 +174,6 @@ export const demoApi = {
     return { shifts, people };
   },
   async site() { return clone(read().site); },
-  async updateSite(site) {
-    const numbers = [site.latMin, site.latMax, site.lonMin, site.lonMax].map(Number);
-    if (numbers.some(x => !Number.isFinite(x)) || numbers[0] >= numbers[1] || numbers[2] >= numbers[3]) fail("Проверьте границы площадки: минимум должен быть меньше максимума.");
-    const state = read(); state.site = { ...state.site, ...site, latMin: numbers[0], latMax: numbers[1], lonMin: numbers[2], lonMax: numbers[3] };
-    write(state); return clone(state.site);
-  },
   async ask() { return { status: "unavailable", answer: "В деморежиме ответы помощника отключены. Для ответа на реальных данных нужен сервер аналитики и модель." }; },
   async summary() { return { status: "unavailable", answer: "Сводка появится после подключения сервера аналитики и модели. Деморежим не придумывает показатели." }; },
 };
