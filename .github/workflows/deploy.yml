@@ -1,0 +1,77 @@
+# Автодеплой стенда (docs/pipeline.md):
+#   push в main        → прод   (/srv/prohodnaya,       environment production)
+#   push в infra/stage → тест   (/srv/prohodnaya-stage, environment stage)
+#   кнопка             → тот стенд, ветка которого выбрана; вход services: auto / all / список.
+# Сначала CI (ci.yml на раннерах GitHub), затем deploy/deploy.sh на self-hosted раннере.
+# Код из PR и форков на сервере не выполняется: только push в эти ветки и кнопка в этом репо.
+name: deploy
+
+on:
+  push:
+    branches: [main, infra/stage]
+  workflow_dispatch:
+    inputs:
+      services:
+        description: "Что пересобрать: auto (по изменениям), all или список через запятую (frontend,backend)"
+        required: false
+        default: auto
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    needs: ci
+    if: github.repository == 'bombomteam/prohodnaya' && github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/infra/stage')
+    runs-on: [self-hosted, gpu]
+    environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'stage' }}
+    # Деплои, откаты и бэкапы одного стенда — строго по очереди (плюс flock в скриптах).
+    concurrency:
+      group: stand-${{ github.ref == 'refs/heads/main' && 'prod' || 'stage' }}
+      cancel-in-progress: false
+    timeout-minutes: 30
+    env:
+      STAND_DIR: ${{ github.ref == 'refs/heads/main' && '/srv/prohodnaya' || '/srv/prohodnaya-stage' }}
+      STATE_DIR: ${{ github.ref == 'refs/heads/main' && '/srv/prohodnaya-state' || '/srv/prohodnaya-stage-state' }}
+      PROJECT_NAME: ${{ github.ref == 'refs/heads/main' && 'prohodnaya' || 'prohodnaya-stage' }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          clean: true
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Деплой
+        env:
+          SERVICES_INPUT: ${{ inputs.services }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          services=${SERVICES_INPUT:-auto}
+          if [[ ! $services =~ ^(auto|all|[a-z0-9_-]+(,[a-z0-9_-]+)*)$ ]]; then
+            echo "::error::services: auto, all или список сервисов через запятую (frontend,backend), получено «$services»"
+            exit 2
+          fi
+          trigger=push
+          [[ $EVENT_NAME == workflow_dispatch ]] && trigger=manual
+          # Скрипты — из этой копии репо; коммит забирается из неё же, без сети.
+          bash deploy/deploy.sh --sha "$GITHUB_SHA" --trigger "$trigger" \
+            --source "$GITHUB_WORKSPACE" --services "$services" | tee "$RUNNER_TEMP/deploy.out"
+
+      - name: Релизы стенда
+        if: always()
+        run: |
+          [[ -f deploy/releases.sh ]] || exit 0
+          bash deploy/releases.sh | tee "$RUNNER_TEMP/releases.out" || true
+          {
+            echo "### Деплой: $PROJECT_NAME"
+            echo
+            grep -h '^ИТОГ' "$RUNNER_TEMP/deploy.out" 2>/dev/null | tail -n1 || echo "deploy.sh не дошёл до итога — смотрите лог шага «Деплой»"
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/releases.out" 2>/dev/null || true
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
