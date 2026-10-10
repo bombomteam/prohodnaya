@@ -1,20 +1,19 @@
 from fastapi import APIRouter
 
-from app.dependency import AdminDep
+from app.dependency import AdminDep, DbDep
 from app.schemas.groups import GroupCreate, GroupOut
+from app.services import groups as service
 
 router = APIRouter(tags=["groups"])
 
 
 @router.get("/groups", response_model=list[GroupOut])
-def list_groups(user: AdminDep):
+def list_groups(db: DbDep, user: AdminDep):
     """Список групп (бригад)."""
-    # STUB
-    return [GroupOut(id=1, name="Бригада А", parent_id=None), GroupOut(id=2, name="Звено 1", parent_id=1)]
+    return service.list_groups(db)
 
 
 @router.post("/groups", response_model=GroupOut)
-def create_group(body: GroupCreate, user: AdminDep):
+def create_group(body: GroupCreate, db: DbDep, user: AdminDep):
     """Создаёт группу."""
-    # STUB
-    return GroupOut(id=3, name=body.name, parent_id=body.parent_id)
+    return service.create_group(db, user["sub"], body)

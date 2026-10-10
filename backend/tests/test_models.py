@@ -1,11 +1,6 @@
-import os
-from pathlib import Path
-
 import pytest
-from alembic import command
-from alembic.config import Config
-from sqlalchemy import create_engine, inspect, text
-from sqlalchemy.exc import IntegrityError, OperationalError
+from sqlalchemy import inspect, text
+from sqlalchemy.exc import IntegrityError
 
 import app.models  # noqa: F401
 from app.core.database import Base
@@ -22,28 +17,12 @@ def test_metadata_has_all_tables_and_one_open_shift():
     assert "one_open_shift" in names
 
 
-@pytest.fixture(scope="module")
-def db():
-    """Реальная БД: пропускаем тест, если DATABASE_URL не задан или БД недоступна."""
-    url = os.environ.get("DATABASE_URL")
-    if not url:
-        pytest.skip("DATABASE_URL не задан")
-    engine = create_engine(url)
-    try:
-        engine.connect().close()
-    except OperationalError:
-        pytest.skip("БД недоступна")
-    root = Path(__file__).resolve().parent.parent
-    command.upgrade(Config(str(root / "alembic.ini")), "head")
-    return engine
+def test_migration_creates_tables(db_engine):
+    assert TABLES <= set(inspect(db_engine).get_table_names())
 
 
-def test_migration_creates_tables(db):
-    assert TABLES <= set(inspect(db).get_table_names())
-
-
-def test_second_open_shift_rejected(db):
-    with db.connect() as conn:  # без commit: всё откатывается при выходе
+def test_second_open_shift_rejected(db_engine):
+    with db_engine.connect() as conn:  # без commit: всё откатывается при выходе
         pid = conn.execute(text("INSERT INTO persons (fio) VALUES ('Тест') RETURNING id")).scalar_one()
         ins = text("INSERT INTO shifts (person_id, started_at) VALUES (:p, now())")
         conn.execute(ins, {"p": pid})
