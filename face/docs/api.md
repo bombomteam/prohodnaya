@@ -36,12 +36,14 @@
 
 ## Коды причин
 
+Изменения контракта: 2026-10-10 добавлены `face_covered` и правило «больше одного лица на проходе → `multiple_faces`», в `facts` — `faces_max` и `faces_multi_frames`.
+
 Полная таблица с текстами для человека — [02-tasks.md](02-tasks.md#решение-причины-отказа-код--человеческий-текст). Поле `reason.text` модуль заполняет этим текстом.
 
 Используемые коды:
 
 - `ok`;
-- `no_face`, `multiple_people`, `multiple_faces`, `turn_to_camera`, `too_small`, `low_quality`;
+- `no_face`, `multiple_people`, `multiple_faces`, `face_covered`, `turn_to_camera`, `too_small`, `low_quality`;
 - `face_mismatch`;
 - `spoof_suspected`, `frame_is_reference`, `frame_replayed`;
 - `no_frames`, `camera_unavailable`;
@@ -146,6 +148,8 @@
     "frames_usable": 15,
     "people_max": 1,
     "people_multi_frames": 0,
+    "faces_max": 1,
+    "faces_multi_frames": 0,
     "similarity": 0.62,
     "threshold": 0.40,
     "match": true,
@@ -170,11 +174,12 @@
 1. `reference_outdated` — эталон от другой модели.
 2. `camera_unavailable`, `no_frames` — нет кадров за окно.
 3. `multiple_people` — двое и больше в зоне прохода. Нужно ≥ 2 кадра подряд, одиночный ложный кадр не считается.
-4. `frame_is_reference`, `frame_replayed` — кадр совпадает с эталоном или уже присылался (в основном запасной режим).
-5. `spoof_suspected` — пассивный антиспуфинг по кадрам окна или «живость» по нескольким кадрам.
-6. `no_face`, `turn_to_camera`, `too_small`, `low_quality` — нет пригодного кадра. Берётся самая частая причина среди кадров окна.
-7. `face_mismatch` — лучший пригодный кадр ниже порога.
-8. `ok`.
+4. `multiple_faces` — на кадре больше одного лица сопоставимого размера, в том числе лицо на фото или экране рядом с живым. Детектор людей насчитает одного человека, а лиц два. В видео нужно ≥ 2 кадра подряд, в `verify/frames` — сразу.
+5. `frame_is_reference`, `frame_replayed` — кадр совпадает с эталоном или уже присылался (в основном запасной режим).
+6. `spoof_suspected` — пассивный антиспуфинг по кадрам окна или «живость» по нескольким кадрам.
+7. `face_covered`, `no_face`, `turn_to_camera`, `too_small`, `low_quality` — нет пригодного кадра. Берётся самая частая причина среди кадров окна. `face_covered` — лицо найдено, но закрыто (балаклава, маска, рука или телефон перед лицом): это не `face_mismatch`.
+8. `face_mismatch` — лучший пригодный кадр ниже порога.
+9. `ok`.
 
 `facts` заполняются всегда, насколько удалось посчитать. Это для журнала и консоли.
 
