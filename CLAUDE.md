@@ -41,6 +41,8 @@ There is no Python 3.12 on the host (system python3 is 3.9): run backend tests i
 - Face reason codes map to `FACE_<REASON>` (e.g. `FACE_NO_FACE`, `FACE_FACE_MISMATCH`) with the module's `reason.text`; `FaceRejected` (4xx bad_image/unsupported_format/too_large) → 422 on enrollment; `FaceUnavailable` → `FACE_SERVICE_UNAVAILABLE`. A pass is allowed only on valid phone signature AND `status == "ok"`.
 - Route bodies still marked `# STUB` are placeholders from Ф1; `tests/test_no_stubs.py` (Ф8) must find none.
 - The pass decision is server-side only: nonce is one-shot and consumed by atomic `UPDATE ... WHERE status=... RETURNING`; every deny writes an `access_events` row.
+- Pass flow (`services/passage.py`, Ф4): `/sign` builds the signed message `session_id|nonce|direction` from the DB, never from the client; a bad signature keeps the session `pending`. `/face` checks business rules first (no module call on deny), commits, calls `face.verify_frames` outside any transaction, then decision + shift + event in one transaction (`_finish`). Business deny = 200 `decision=deny`; technical errors: 404 `SESSION_NOT_FOUND`, 403 `DEVICE_INVALID`, 409 `SESSION_EXPIRED`, 403 `SESSION_FOREIGN`.
+- Tests needing a DB use the separate `<db>_test` database from `tests/conftest.py` (fixtures `client`, `db`); never point tests at the app DB.
 
 Frontend: see `frontend/AGENTS.md` before touching `frontend/`.
 
