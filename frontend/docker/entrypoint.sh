@@ -28,7 +28,8 @@ case "$mode" in
     *) fail 'FRONTEND_MODE must be demo or api' ;;
 esac
 
-cat > /usr/share/nginx/html/config.js <<EOF
+# Written to /tmp so the image filesystem can stay read-only; nginx serves it as /config.js.
+cat > /tmp/config.js <<EOF
 // Generated when the container starts. Do not put secrets here: browsers can read this file.
 export const config = {
   mode: "$mode",
