@@ -307,7 +307,7 @@ jobs:
             # Аннотация на каждую находку (секрет в отчёте скрыт --redact).
             jq -r '.[] | "::error file=\(.File),line=\(.StartLine),title=gitleaks: \(.RuleID)::\(.Description) — коммит \(.Commit[0:12]), строка \(.StartLine)"' \
               "$RUNNER_TEMP/gitleaks.json" 2>/dev/null || true
-            echo "::error title=gitleaks::Найден возможный секрет (см. Finding/File/Line выше). Как исправить: убрать его из коммитов ветки (git commit --amend / git rebase -i, затем git push --force-with-lease) и СМЕНИТЬ секрет — он уже на GitHub. Ложное срабатывание — точечное исключение в .gitleaks.toml (путь + регэксп)."
+            echo "::error title=gitleaks::Найден возможный секрет (см. Finding/File/Line выше). Как исправить: СРАЗУ смените этот пароль/ключ (он уже на GitHub), удалите его из файла обычным коммитом и напишите DevOps. Историю сами не переписывайте (никаких --force). Ложное срабатывание — точечное исключение в .gitleaks.toml (путь + регэксп)."
             exit "$rc"
           fi
           # Защита от тихого «0 commits scanned» (например, если git в контейнере не прочитал репозиторий).
