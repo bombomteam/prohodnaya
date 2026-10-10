@@ -13,6 +13,10 @@ Backend защищает операторские маршруты Bearer JWT Ke
 
 Точный контракт для реализации `/auth/*` — [задание бэкендеру](backend-auth-handoff.md). Redirect URI всегда `location.origin + "/"`; на стенде это `https://hack-detect.duckdns.org/`, Keycloak — `https://auth.hack-detect.duckdns.org`. Клиент `panel` должен иметь default scopes `basic`, `acr` и audience `access-api`. Уже импортированный realm обновляет владелец стенда после слияния PR.
 
+### Демо-вход стенда
+
+`GET /api/auth/config` может вернуть `demoLogin: true`. Тогда вместо стены входа показывается стартовый экран (`src/landing.js`): четыре карточки ролей, «Как проверить кейс» и ссылка «Войти через Keycloak». Клик по роли отправляет `POST /api/auth/demo {"role":"admin"|"manager"|"controller"}`. Ответ такой же, как у `/api/auth/exchange`, поэтому токены сохраняются тем же `accept()` в `src/auth.js`. «Телефон рабочего» открывает `?worker=1` и вход не требует. Если `demoLogin` нет или равен `false`, либо `/auth/config` не отвечает, поведение прежнее (Keycloak). В демо-входе на каждом экране есть переключатель ролей без выхода и строка «Что здесь проверить», а в меню появляется страница «Как проверить кейс». Выбранная роль помнится в `sessionStorage` вкладки, чтобы перезагрузка не возвращала на старт; «Выйти» её забывает.
+
 ## Администратор
 
 - `GET /groups`, `POST /groups` (`name`, `parent_id`), `GET /persons`: группы и таблица; `PersonOut` содержит `fio`, `position`, `group`, `status`, `on_site`, `has_face`, `has_active_device`.

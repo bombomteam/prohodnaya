@@ -104,3 +104,44 @@
 @media(max-width:420px){.case-zone-map{grid-template-columns:1fr}.case-zone-card{min-height:0}.route-timeline li{display:grid;gap:3px}}
 .hint-line{margin:6px 0 12px;font-size:12px;line-height:1.45;color:#4b625d}
 .assistant-answer .badge{margin-left:6px;vertical-align:middle;white-space:normal}.assistant-facts{margin:12px 0 8px;font-size:11px}.assistant-facts summary{cursor:pointer;font-weight:800;color:#338458}.assistant-facts ul{margin:8px 0 0;padding-left:18px;line-height:1.7}.assistant-facts pre{margin:8px 0 0;padding:10px;background:#fff;border:1px solid #deebe1;border-radius:7px;overflow:auto;font-size:10px;white-space:pre-wrap}.assistant-model{display:block;margin-top:8px}.assistant-model-block{padding:0 21px 18px}.assistant-model-block p{margin:0 0 8px;font-size:11px}.assistant-model-block .muted{color:#91a198}.assistant-model-block .segment{margin:10px 0 0}
+
+/* Стартовый экран демо-стенда, переключатель ролей и «Как проверить кейс»: только классы .landing-* и .guide-*. */
+.landing-page{max-width:880px;margin:0 auto;padding:clamp(20px,5vw,48px) 16px 48px}
+.landing-hero{margin-bottom:22px}
+.landing-brand{display:flex;align-items:center;gap:10px;margin-bottom:22px}
+.landing-brand strong{font-size:13px;letter-spacing:.1em;color:#102b25}
+.landing-brand .brand-mark{width:35px;height:35px;border-radius:11px;background:#46c98a;color:#0b3021;display:grid;place-items:center;font-size:25px;font-weight:800}
+.landing-hero h1{font-size:clamp(26px,7vw,38px);line-height:1.15;margin-bottom:10px}
+.landing-hero p{margin:0;max-width:56ch;font-size:15px;color:#56685f}
+.landing-cards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin:24px 0 18px}
+.landing-card{display:flex;align-items:center;gap:14px;min-height:96px;padding:18px;text-align:left;text-decoration:none;color:#182a27;background:#fff;border:1px solid #dbe7de;border-radius:14px;box-shadow:0 3px 18px #193b2810;transition:border-color .15s,box-shadow .15s}
+.landing-card:hover:not(:disabled){border-color:#46c98a;box-shadow:0 6px 24px #193b2822}
+.landing-card:focus-visible,.landing-link:focus-visible,.guide-role:focus-visible,.guide-go:focus-visible{outline:3px solid #4ab97b66;outline-offset:2px}
+.landing-card-icon{flex:none;width:46px;height:46px;border-radius:12px;background:#e3f5e9;color:#188b57;display:grid;place-items:center;font-size:24px}
+.landing-card-text{flex:1;min-width:0;display:grid;gap:3px}
+.landing-card-text b{font-size:17px}
+.landing-card-text small{font-size:13px;line-height:1.4;color:#66786f}
+.landing-card-go{flex:none;color:#188b57;font-size:20px;font-weight:800}
+.landing-extra{display:flex;align-items:center;flex-wrap:wrap;gap:12px 20px}
+.landing-extra .button{min-height:44px;font-size:13px}
+.landing-link{background:none;border:0;padding:8px 2px;font-size:12px;color:#7c8f86;text-decoration:underline;text-underline-offset:3px}
+.guide-panel{margin-top:22px;padding:22px}
+.guide-head h2{font-size:20px}
+.guide-head p{margin:0 0 12px;font-size:13px;color:#66786f}
+.guide-steps{list-style:none;margin:0;padding:0}
+.guide-step{display:flex;gap:14px;padding:16px 0;border-top:1px solid #edf2ee}
+.guide-num{flex:none;width:30px;height:30px;border-radius:50%;background:#188b57;color:#fff;display:grid;place-items:center;font-size:13px;font-weight:800}
+.guide-body{min-width:0}
+.guide-body b{font-size:15px}
+.guide-body p{margin:5px 0 0;font-size:13px;line-height:1.55;color:#4b625d}
+.guide-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.guide-go{display:inline-flex;align-items:center;min-height:42px;text-decoration:none;font-size:12px;white-space:normal;text-align:left}
+.guide-bar{margin:0 0 18px}
+.guide-bar-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.guide-bar-label{font-size:10px;font-weight:800;letter-spacing:.12em;color:#98aba2;text-transform:uppercase}
+.guide-roles{display:flex;flex-wrap:wrap;gap:6px}
+.guide-role{display:inline-flex;align-items:center;min-height:38px;padding:7px 12px;border:1px solid #dae6dd;border-radius:999px;background:#fff;color:#337650;font-size:12px;font-weight:700;text-decoration:none;white-space:nowrap}
+.guide-role.selected{background:#188b57;border-color:#188b57;color:#fff}
+.guide-hint{margin:10px 0 0;font-size:12px;line-height:1.5;color:#8a9b92}
+.guide-hint b{font-weight:700;color:#7c8f86}
+@media(max-width:620px){.landing-cards{grid-template-columns:1fr}.landing-card{min-height:88px}.guide-panel{padding:16px}.guide-step{gap:11px}.guide-go{width:100%;justify-content:center;text-align:center}}

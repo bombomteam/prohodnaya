@@ -1,7 +1,8 @@
 import { config } from "../config.js";
 import { api, appearancesFromRoutes } from "./api.js";
 import { CASE_ZONES, caseZoneById, caseZoneMetrics, caseZoneName } from "./zones.js";
-import { session, allowedPages, canEdit, canManageSite, initAuth, login, logout, demoRole, useWorker } from "./auth.js";
+import { session, allowedPages, canEdit, canManageSite, initAuth, login, logout, demoRole, useWorker, loadAuthConfig, demoLoginEnabled, demoLogin, savedDemoRole } from "./auth.js";
+import { landingHtml, demoBarHtml, guideHtml } from "./landing.js";
 import { forgetDevice, requireSecureContext } from "./device.js";
 import { createView } from "./view.js";
 
@@ -16,7 +17,7 @@ const state = {
   page: "overview", employees: [], groups: [], attempts: [], dashboard: null, analytics: null, shiftReport: null, personReport: null, site: null, selectedRouteId: null,
   worker: null, workerId: "", workerPassage: null, gateEmployeeId: "", direction: "entry", challenge: null, passResult: null,
   cameraStream: null, faceBlob: null, faceFrames: [], faceUrl: null, employeeError: null, locationWatch: null, locationLastSent: 0,
-  locationStatus: "Геолокация выключена", workerNotice: "", assistant: null, assistantInfo: null, busy: false, toast: null, loadError: null, mobileMenu: false,
+  locationStatus: "Геолокация выключена", workerNotice: "", assistant: null, assistantInfo: null, busy: false, toast: null, loadError: null, mobileMenu: false, landingBusy: "", guideOpen: false,
   filters: { from: nowDate(), to: nowDate(), hourFrom: "0", hourTo: "23", employeeIds: "" },
 };
 
@@ -28,12 +29,13 @@ const pageMeta = {
   analytics: ["Аналитика", "Появления работников, посещаемость зон и отчёты"],
   assistant: ["Помощник", "Вопросы и сводки по данным системы"],
   journal: ["Журнал проходов", "Все успешные и отклонённые попытки"],
+  guide: ["Как проверить кейс", "Пошагово: что нажать, чтобы проверить все пункты кейса"],
 };
 const nav = [
   ["overview", "▦", "Обстановка"], ["employees", "♙", "Сотрудники"],
   ["gate", "◉", "Проходная"], ["worker", "▣", "Телефон рабочего"],
   ["analytics", "◇", "Аналитика"], ["assistant", "✦", "Помощник"],
-  ["journal", "☷", "Журнал"],
+  ["journal", "☷", "Журнал"], ["guide", "✓", "Как проверить кейс"],
 ];
 
 function esc(value) { return String(value ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]); }
@@ -280,11 +282,14 @@ function journal() {
 
 function render() {
   if (!initialized || !allowedPages().includes(state.page)) {
+    if (initialized && session.kind === "guest" && demoLoginEnabled()) { paint(landingHtml({ busyRole: state.landingBusy, error: entryError, guideOpen: state.guideOpen })); return; }
     paint(`<main class="main-content"><h1>Проходная</h1><p>${esc(entryError || (!initialized ? "Подключение…" : session.kind === "operator" ? "Доступ не назначен" : "Выберите способ входа"))}</p><button class="button button-primary" data-action="login">Вход оператора</button><button class="button button-outline" data-action="worker-entry">Телефон рабочего</button></main>`);
     return;
   }
-  const content = ({ overview, employees, gate, worker, analytics: mapView, assistant, journal })[state.page]();
-  paint(shell(content));
+  const content = ({ overview, employees, gate, worker, analytics: mapView, assistant, journal, guide: guideHtml })[state.page]();
+  // Демо-стенд: смена роли без выхода и подсказка «Что здесь проверить» над содержимым экрана.
+  const demoBar = demoLoginEnabled() && (session.demo || session.kind === "worker") ? demoBarHtml({ current: session.kind === "worker" ? "worker" : session.demo, page: state.page, busy: Boolean(state.landingBusy) }) : "";
+  paint(shell(demoBar + content));
   if (state.page === "gate" && state.cameraStream && !state.faceUrl) {
     const video = document.querySelector("#camera-video");
     if (video) {
@@ -305,6 +310,26 @@ function refusedAtOnce() {
   state.challenge = null; state.faceBlob = null; state.faceFrames = [];
   return true;
 }
+// Вход по кнопке роли (стартовый экран, переключатель, шаги «Как проверить кейс»): роль меняется без выхода, потом открывается нужный экран.
+async function enterDemoRole(role, page) {
+  if (state.landingBusy) return;
+  entryError = "";
+  if (!(session.kind === "operator" && session.demo === role)) {
+    state.landingBusy = role; render();
+    try { stopLocation(); clearChallenge(); await demoLogin(role); }
+    catch (error) {
+      state.landingBusy = "";
+      if (session.kind === "guest") { entryError = errorMessage(error); render(); } else notify(errorMessage(error), "error");
+      return;
+    }
+    state.landingBusy = ""; state.enrollCode = null; state.workerPassage = null; state.dashboard = null; state.worker = null; state.workerId = "";
+    state.employees = []; state.attempts = []; state.assistant = null; state.assistantInfo = null; state.gateEmployeeId = "";
+    // Из режима телефона рабочего (?worker=1, /enroll) уходим на корень, иначе перезагрузка вернёт на телефон.
+    if (/(^|[?&])worker=1/.test(location.search) || /^\/enroll\/?$/.test(location.pathname)) history.replaceState(null, "", location.origin + "/");
+  }
+  state.page = allowedPages().includes(page) ? page : allowedPages()[0];
+  state.mobileMenu = false; state.toast = null; state.loadError = null; render(); await refresh();
+}
 async function run(action) { if (state.busy) return; state.busy = true; render(); try { await action(); } catch (error) { notify(errorMessage(error), "error"); } finally { state.busy = false; render(); } }
 
 root.addEventListener("click", async (event) => {
@@ -322,6 +347,9 @@ root.addEventListener("click", async (event) => {
     document.querySelector("#route-detail")?.scrollIntoView({ behavior: "smooth", block: "start" });
     return;
   }
+  if (action === "demo-login" || action === "demo-switch") { await enterDemoRole(button.dataset.role); return; }
+  if (action === "guide-go") { await enterDemoRole(button.dataset.role, button.dataset.go); return; }
+  if (action === "toggle-guide") { state.guideOpen = !state.guideOpen; render(); return; }
   if (action === "login") { try { await login(); } catch (e) { entryError = errorMessage(e); render(); } return; }
   if (action === "worker-entry") { const url = new URL(location.href); url.search = "?worker=1"; url.hash = ""; location.assign(url); return; }
   if (action === "logout") { stopLocation(); clearChallenge(); state.enrollCode = null; try { await logout(); } finally { location.assign(location.pathname); } return; }
@@ -587,13 +615,16 @@ setInterval(async () => {
 }, config.pollingMs);
 
 window.addEventListener("operator-session-expired", (event) => {
-  stopLocation(); clearChallenge(); Object.assign(session, { kind: "guest", roles: [], name: "" });
+  stopLocation(); clearChallenge(); Object.assign(session, { kind: "guest", roles: [], name: "", demo: false });
   state.employees = []; state.attempts = []; state.dashboard = null; state.enrollCode = null; state.assistant = null; state.assistantInfo = null;
   entryError = event.detail?.message || "Сессия истекла, войдите заново"; render();
 });
 window.addEventListener("beforeunload", () => { stopCamera(); stopLocation(); });
 render();
 try { await initAuth(); } catch (error) { entryError = errorMessage(error); }
+// Демо-стенд: сервер сообщает, можно ли входить кнопкой роли. Прошлая роль этой вкладки возвращается после перезагрузки.
+await loadAuthConfig();
+if (demoLoginEnabled() && session.kind === "guest" && savedDemoRole()) { try { await demoLogin(savedDemoRole()); entryError = ""; } catch { /* остаётся стартовый экран */ } }
 initialized = true;
 state.page = allowedPages()[0] || "overview";
 render();

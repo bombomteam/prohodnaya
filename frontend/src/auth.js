@@ -1,12 +1,15 @@
 import { config } from "../config.js";
 import { requireSecureContext } from "./device.js";
+import { roleTitle } from "./landing.js";
 let transport;
 let tokens;
 let settings;
+let demoEnabled = false;
+const DEMO_ROLE_KEY = "demo-role";
 export function configureAuthTransport(fn) { transport = fn; }
-export const session = { kind: "guest", roles: [], name: "", dev: false };
+export const session = { kind: "guest", roles: [], name: "", dev: false, demo: false };
 export function allowedPages(kind = session.kind, roles = session.roles) {
-  if (kind === "worker") return ["worker"];
+  if (kind === "worker") return demoEnabled ? ["worker", "guide"] : ["worker"];
   if (kind !== "operator") return [];
   const pages = new Set();
   for (const role of roles) {
@@ -14,6 +17,7 @@ export function allowedPages(kind = session.kind, roles = session.roles) {
     if (role === "manager") ["overview", "analytics", "assistant", "journal"].forEach(p => pages.add(p));
     if (role === "controller") pages.add("gate");
   }
+  if (demoEnabled && session.demo && pages.size) pages.add("guide");
   return [...pages];
 }
 export function canEdit() { return session.kind === "operator" && session.roles.includes("admin"); }
@@ -28,7 +32,34 @@ function redirectUri() { return location.origin + "/"; }
 function accept(result) {
   if (!result?.accessToken || !result.user || !Array.isArray(result.user.roles) || !Number.isFinite(Number(result.expiresIn)) || Number(result.expiresIn) <= 0) throw new Error("Сервер не вернул проверенный профиль оператора.");
   tokens = { ...result, expiresAt: Date.now() + Number(result.expiresIn) * 1000 };
-  Object.assign(session, {kind:"operator",roles:result.user.roles,name:result.user.preferred_username || "Оператор"});
+  Object.assign(session, {kind:"operator",roles:result.user.roles,name:session.demo ? session.name : result.user.preferred_username || "Оператор"});
+}
+// Демо-стенд: сервер сам сообщает, можно ли войти кнопкой роли (GET /auth/config → demoLogin). Нет маршрута или ошибка — прежний вход.
+export function demoLoginEnabled() { return demoEnabled; }
+export async function loadAuthConfig() {
+  demoEnabled = false;
+  if (config.mode !== "api") return { demoLogin: false };
+  try {
+    const value = await transport("/auth/config", { auth: "none", timeoutMs: 6000 });
+    demoEnabled = value?.demoLogin === true;
+  } catch { demoEnabled = false; }
+  return { demoLogin: demoEnabled };
+}
+export function savedDemoRole() {
+  try { const role = sessionStorage.getItem(DEMO_ROLE_KEY); return ["admin", "manager", "controller"].includes(role) ? role : ""; } catch { return ""; }
+}
+function rememberDemoRole(role) { try { if (role) sessionStorage.setItem(DEMO_ROLE_KEY, role); else sessionStorage.removeItem(DEMO_ROLE_KEY); } catch { /* память вкладки недоступна: после перезагрузки выберите роль снова */ } }
+// Вход кнопкой роли: ответ тот же, что у /auth/exchange, поэтому токены сохраняются тем же accept().
+export async function demoLogin(role) {
+  if (!["admin", "manager", "controller"].includes(role)) throw new Error("Неизвестная роль.");
+  let result;
+  try { result = await transport("/auth/demo", { method: "POST", auth: "none", body: { role } }); }
+  catch (error) { if (error.status === 404) throw new Error("На этом сервере вход по кнопке роли выключен."); throw error; }
+  const wasDemo = session.demo;
+  session.demo = role; // выбранная демо-роль: ею подсвечивается переключатель, даже если сервер вернул больше ролей
+  try { accept(result); } catch (error) { session.demo = wasDemo; throw error; }
+  session.name = `Демо: ${roleTitle(role)}`;
+  rememberDemoRole(role);
 }
 export async function initAuth() {
   const url = new URL(location.href);
@@ -68,7 +99,7 @@ export async function login() {
 }
 export async function logout() {
   const refreshToken = tokens?.refreshToken;
-  tokens = undefined; Object.assign(session,{kind:"guest",roles:[],name:"",dev:false});
+  tokens = undefined; Object.assign(session,{kind:"guest",roles:[],name:"",dev:false,demo:false}); rememberDemoRole("");
   if (refreshToken) await transport("/auth/logout", {method:"POST",auth:"none",body:{refreshToken}});
 }
 let refreshing;
@@ -76,7 +107,11 @@ export async function accessToken() {
   if (session.dev && ["localhost", "127.0.0.1"].includes(new URL(location.href).hostname)) return null;
   if (!tokens) throw new Error("Сессия истекла, войдите заново");
   if (Date.now() >= tokens.expiresAt - 30000) {
-    refreshing ||= transport("/auth/refresh", {method:"POST",auth:"none",body:{refreshToken:tokens.refreshToken}}).then(accept).catch(() => { tokens=undefined; Object.assign(session,{kind:"guest",roles:[],name:""}); throw new Error("Сессия истекла, войдите заново"); }).finally(() => {refreshing=undefined;});
+    refreshing ||= transport("/auth/refresh", {method:"POST",auth:"none",body:{refreshToken:tokens.refreshToken}}).then(accept).catch(async () => {
+      const role = typeof session.demo === "string" ? session.demo : "";
+      if (role) { try { await demoLogin(role); return; } catch { /* вход по кнопке не удался: ниже обычный выход */ } }
+      tokens=undefined; Object.assign(session,{kind:"guest",roles:[],name:"",demo:false}); throw new Error("Сессия истекла, войдите заново");
+    }).finally(() => {refreshing=undefined;});
     await refreshing;
   }
   return tokens.accessToken;
